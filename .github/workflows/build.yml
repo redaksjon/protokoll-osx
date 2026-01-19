@@ -52,7 +52,7 @@ jobs:
           ls -la "${APP_BUNDLE}/Contents/MacOS/"
 
       - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: Protokoll-${{ github.sha }}
           path: .build/release/Protokoll
