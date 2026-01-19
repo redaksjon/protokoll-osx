@@ -1,0 +1,96 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+Packages/
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+DerivedData/
+
+# Xcode - Build generated
+build/
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Icon must end with two \r
+Icon
+
+# Thumbnails
+Thumbs.db
+
+# Editor artifacts
+*.swp
+*.swo
+*~
+*.orig
+.idea/
+*.sublime-workspace
+
+# Build products
+*.app
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Crash reports
+*.crash
+
+# Playgrounds
+timeline.xctimeline
+playground.xcworkspace
+
+# CocoaPods (if used)
+Pods/
+*.xcworkspace
+
+# Carthage (if used)
+Carthage/Build/
+Carthage/Checkouts/
+
+# Fastlane (if used)
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
+
+# Code Injection
+.inject.swift
+
+# User settings
+UserSettings.plist
+
+# Environment and secrets
+.env
+.env.*
+*.pem
+*.p12
+*.mobileprovision
+
+# Logs
+*.log
+logs/
+
+# Test coverage
+coverage/
+*.profdata
+*.profraw

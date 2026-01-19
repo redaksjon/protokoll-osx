@@ -1,0 +1,109 @@
+name: Test
+
+on:
+  push:
+    branches: [main, working]
+  pull_request:
+    branches: [main, working]
+
+jobs:
+  test:
+    name: Test on macOS
+    runs-on: macos-14
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      - name: Run tests with coverage
+        run: swift test --enable-code-coverage --parallel
+
+      - name: Generate lcov report
+        run: |
+          # Find the profdata file
+          PROFDATA=$(find .build -name "*.profdata" -type f | head -1)
+          echo "Found profdata: $PROFDATA"
+          
+          # Find the test binary
+          TEST_BINARY=$(find .build -name "ProtokolPackageTests.xctest" -type d | head -1)/Contents/MacOS/ProtokolPackageTests
+          if [ ! -f "$TEST_BINARY" ]; then
+            TEST_BINARY=$(find .build -name "*.xctest" -type d | head -1)/Contents/MacOS/*
+          fi
+          echo "Found test binary: $TEST_BINARY"
+          
+          # Generate lcov format
+          xcrun llvm-cov export \
+            -format=lcov \
+            -instr-profile="$PROFDATA" \
+            "$TEST_BINARY" \
+            > coverage/lcov.info || true
+          
+          # Also generate text report for logs
+          xcrun llvm-cov report \
+            -instr-profile="$PROFDATA" \
+            "$TEST_BINARY" || true
+        continue-on-error: true
+
+      - name: Create coverage directory
+        run: mkdir -p coverage
+
+      - name: Generate coverage report (alternative method)
+        run: |
+          # Alternative: Use swift test's built-in coverage export
+          PROFDATA=$(find .build -name "default.profdata" -type f 2>/dev/null | head -1)
+          if [ -z "$PROFDATA" ]; then
+            PROFDATA=$(find .build -name "*.profdata" -type f 2>/dev/null | head -1)
+          fi
+          
+          if [ -n "$PROFDATA" ]; then
+            echo "Using profdata: $PROFDATA"
+            
+            # Find any executable in the build
+            BINARY=$(find .build/debug -type f -perm +111 ! -name "*.dylib" ! -name "*.o" 2>/dev/null | head -1)
+            
+            if [ -n "$BINARY" ]; then
+              echo "Using binary: $BINARY"
+              xcrun llvm-cov export \
+                -format=lcov \
+                -instr-profile="$PROFDATA" \
+                "$BINARY" \
+                -ignore-filename-regex=".build|Tests" \
+                > coverage/lcov.info 2>/dev/null || echo "Coverage export failed"
+            fi
+          fi
+          
+          # Show what we have
+          if [ -f coverage/lcov.info ]; then
+            echo "Coverage file created:"
+            head -50 coverage/lcov.info
+          else
+            echo "No coverage file generated"
+          fi
+        continue-on-error: true
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: coverage/lcov.info
+          fail_ci_if_error: false
+          verbose: true
+        continue-on-error: true
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 7
+        if: always()

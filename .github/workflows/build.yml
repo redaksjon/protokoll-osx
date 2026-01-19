@@ -1,0 +1,59 @@
+name: Build
+
+on:
+  push:
+    branches: [main, working]
+  pull_request:
+    branches: [main, working]
+
+jobs:
+  build:
+    name: Build on macOS
+    runs-on: macos-14
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      - name: Build (Debug)
+        run: swift build -c debug
+
+      - name: Build (Release)
+        run: swift build -c release
+
+      - name: Build macOS App
+        run: |
+          # Build the app bundle
+          swift build -c release
+          
+          # Create app bundle structure
+          APP_NAME="Protokoll"
+          BUILD_DIR=".build/release"
+          APP_BUNDLE="${APP_NAME}.app"
+          
+          mkdir -p "${APP_BUNDLE}/Contents/MacOS"
+          mkdir -p "${APP_BUNDLE}/Contents/Resources"
+          
+          # Copy executable
+          cp "${BUILD_DIR}/${APP_NAME}" "${APP_BUNDLE}/Contents/MacOS/"
+          
+          echo "App bundle created successfully"
+          ls -la "${APP_BUNDLE}/Contents/MacOS/"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Protokoll-${{ github.sha }}
+          path: .build/release/Protokoll
+          retention-days: 7
