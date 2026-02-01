@@ -1,6 +1,9 @@
 import Foundation
 import OSLog
 
+/// Type alias for transport factory closure
+public typealias TransportFactory = @Sendable (String, Logger) -> any MCPTransport
+
 /// Manages the lifecycle of the protokoll-mcp server
 @available(macOS 14.0, *)
 public actor ServerManager {
@@ -9,11 +12,13 @@ public actor ServerManager {
     
     private let serverPath: String
     private let logger: Logger
-    private var transport: StdioTransport?
+    private let transportFactory: TransportFactory
+    private var transport: (any MCPTransport)?
     private var client: MCPClient?
     private var restartAttempts: Int = 0
     private let maxRestartAttempts: Int = 3
     private var isShuttingDown: Bool = false
+    private var healthMonitoringTask: Task<Void, Never>?
     
     // MARK: - State
     
@@ -37,12 +42,19 @@ public actor ServerManager {
     
     // MARK: - Initialization
     
+    /// Default transport factory that creates StdioTransport
+    public static let defaultTransportFactory: TransportFactory = { path, logger in
+        StdioTransport(serverPath: path, logger: logger)
+    }
+    
     public init(
         serverPath: String = NSHomeDirectory() + "/.nvm/versions/node/v24.8.0/bin/protokoll-mcp",
-        logger: Logger = Logger(subsystem: "com.protokoll.mcp", category: "server")
+        logger: Logger = Logger(subsystem: "com.protokoll.mcp", category: "server"),
+        transportFactory: TransportFactory? = nil
     ) {
         self.serverPath = serverPath
         self.logger = logger
+        self.transportFactory = transportFactory ?? ServerManager.defaultTransportFactory
     }
     
     // MARK: - Lifecycle
@@ -61,8 +73,8 @@ public actor ServerManager {
         logger.info("Starting server")
         
         do {
-            // Create transport and client
-            let transport = StdioTransport(serverPath: serverPath, logger: logger)
+            // Create transport and client using factory
+            let transport = transportFactory(serverPath, logger)
             let client = MCPClient(transport: transport, logger: logger)
             
             // Start client (which starts transport and initializes)
@@ -77,12 +89,15 @@ public actor ServerManager {
             logger.info("Server started successfully")
             
             // Start health monitoring
-            Task {
+            healthMonitoringTask = Task {
                 await monitorHealth()
             }
             
             return client
         } catch {
+            // Make sure health monitoring doesn't start if we failed
+            healthMonitoringTask?.cancel()
+            healthMonitoringTask = nil
             state = .crashed
             logger.error("Failed to start server: \(error.localizedDescription)")
             throw ServerManagerError.startFailed(error: error)
@@ -98,6 +113,10 @@ public actor ServerManager {
         isShuttingDown = true
         state = .shuttingDown
         logger.info("Stopping server")
+        
+        // Cancel health monitoring task
+        healthMonitoringTask?.cancel()
+        healthMonitoringTask = nil
         
         do {
             try await client?.stop()
@@ -129,11 +148,16 @@ public actor ServerManager {
     // MARK: - Health Monitoring
     
     private func monitorHealth() async {
-        while isRunning && !isShuttingDown {
-            // Wait 10 seconds between health checks
-            try? await Task.sleep(nanoseconds: 10_000_000_000)
+        while !Task.isCancelled && isRunning && !isShuttingDown {
+            // Wait 10 seconds between health checks, but check cancellation frequently
+            for _ in 0..<100 {
+                guard !Task.isCancelled && isRunning && !isShuttingDown else {
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s chunks
+            }
             
-            guard let client = client, !isShuttingDown else {
+            guard !Task.isCancelled, let client = client, !isShuttingDown else {
                 break
             }
             

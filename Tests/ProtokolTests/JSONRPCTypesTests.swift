@@ -149,4 +149,264 @@ final class JSONRPCTypesTests: XCTestCase {
         let dict = decoded.value as? [String: Any]
         XCTAssertEqual(dict?["name"] as? String, "test")
     }
+    
+    // MARK: - Additional JSONRPCRequest Tests
+    
+    func testJSONRPCRequestEquality() {
+        let request1 = JSONRPCRequest(id: 1, method: "test")
+        let request2 = JSONRPCRequest(id: 1, method: "test")
+        let request3 = JSONRPCRequest(id: 2, method: "test")
+        let request4 = JSONRPCRequest(id: 1, method: "other")
+        
+        XCTAssertEqual(request1, request2)
+        XCTAssertNotEqual(request1, request3) // Different id
+        XCTAssertNotEqual(request1, request4) // Different method
+    }
+    
+    func testJSONRPCRequestEncodingWithParams() throws {
+        let params = AnyCodable(["key": "value", "count": 42])
+        let request = JSONRPCRequest(id: 10, method: "test/params", params: params)
+        let data = try JSONEncoder().encode(request)
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        
+        XCTAssertEqual(json?["id"] as? Int, 10)
+        XCTAssertNotNil(json?["params"])
+    }
+    
+    // MARK: - Additional JSONRPCResponse Tests
+    
+    func testJSONRPCResponseEncodingWithResult() throws {
+        let response = JSONRPCResponse(id: 5, result: AnyCodable(["status": "ok"]))
+        let data = try JSONEncoder().encode(response)
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        
+        XCTAssertEqual(json?["jsonrpc"] as? String, "2.0")
+        XCTAssertEqual(json?["id"] as? Int, 5)
+        XCTAssertNotNil(json?["result"])
+    }
+    
+    func testJSONRPCResponseDecodingWithError() throws {
+        let json = """
+        {"jsonrpc": "2.0", "id": 1, "error": {"code": -32600, "message": "Invalid Request"}}
+        """
+        let data = json.data(using: .utf8)!
+        let response = try JSONDecoder().decode(JSONRPCResponse.self, from: data)
+        
+        XCTAssertTrue(response.isError)
+        XCTAssertEqual(response.error?.code, -32600)
+        XCTAssertEqual(response.error?.message, "Invalid Request")
+    }
+    
+    // MARK: - Additional JSONRPCError Tests
+    
+    func testJSONRPCErrorWithData() {
+        let errorData = AnyCodable(["detail": "extra info"])
+        let error = JSONRPCError(code: -32000, message: "Custom error", data: errorData)
+        
+        XCTAssertEqual(error.code, -32000)
+        XCTAssertEqual(error.message, "Custom error")
+        XCTAssertNotNil(error.data)
+    }
+    
+    func testJSONRPCErrorEncoding() throws {
+        let error = JSONRPCError(code: -32601, message: "Method not found")
+        let data = try JSONEncoder().encode(error)
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        
+        XCTAssertEqual(json?["code"] as? Int, -32601)
+        XCTAssertEqual(json?["message"] as? String, "Method not found")
+    }
+    
+    func testJSONRPCErrorDecoding() throws {
+        let json = """
+        {"code": -32700, "message": "Parse error"}
+        """
+        let data = json.data(using: .utf8)!
+        let error = try JSONDecoder().decode(JSONRPCError.self, from: data)
+        
+        XCTAssertEqual(error.code, -32700)
+        XCTAssertEqual(error.message, "Parse error")
+    }
+    
+    // MARK: - Additional JSONRPCNotification Tests
+    
+    func testJSONRPCNotificationWithParams() {
+        let params = AnyCodable(["event": "changed"])
+        let notification = JSONRPCNotification(method: "notifications/event", params: params)
+        
+        XCTAssertEqual(notification.method, "notifications/event")
+        XCTAssertNotNil(notification.params)
+    }
+    
+    func testJSONRPCNotificationEquality() {
+        let n1 = JSONRPCNotification(method: "test")
+        let n2 = JSONRPCNotification(method: "test")
+        let n3 = JSONRPCNotification(method: "other")
+        
+        XCTAssertEqual(n1, n2)
+        XCTAssertNotEqual(n1, n3)
+    }
+    
+    func testJSONRPCNotificationEncoding() throws {
+        let notification = JSONRPCNotification(method: "notifications/test")
+        let data = try JSONEncoder().encode(notification)
+        let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        
+        XCTAssertEqual(json?["jsonrpc"] as? String, "2.0")
+        XCTAssertEqual(json?["method"] as? String, "notifications/test")
+        XCTAssertNil(json?["id"]) // Notifications have no id
+    }
+    
+    // MARK: - Additional AnyCodable Tests
+    
+    func testAnyCodableWithDouble() throws {
+        let anyCodable = AnyCodable(3.14159)
+        let data = try JSONEncoder().encode(anyCodable)
+        let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+        
+        guard let decodedDouble = decoded.value as? Double else {
+            XCTFail("Expected Double value")
+            return
+        }
+        XCTAssertEqual(decodedDouble, 3.14159, accuracy: 0.0001)
+    }
+    
+    func testAnyCodableWithNull() throws {
+        let anyCodable = AnyCodable(NSNull())
+        let data = try JSONEncoder().encode(anyCodable)
+        let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+        
+        XCTAssertTrue(decoded.value is NSNull)
+    }
+    
+    func testAnyCodableWithNestedArray() throws {
+        let anyCodable = AnyCodable([[1, 2], [3, 4]])
+        let data = try JSONEncoder().encode(anyCodable)
+        let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+        
+        let array = decoded.value as? [Any]
+        XCTAssertEqual(array?.count, 2)
+    }
+    
+    func testAnyCodableWithNestedDictionary() throws {
+        let anyCodable = AnyCodable(["outer": ["inner": "value"]])
+        let data = try JSONEncoder().encode(anyCodable)
+        let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+        
+        let dict = decoded.value as? [String: Any]
+        let inner = dict?["outer"] as? [String: Any]
+        XCTAssertEqual(inner?["inner"] as? String, "value")
+    }
+    
+    func testAnyCodableWithMixedTypes() throws {
+        let anyCodable = AnyCodable([
+            "string": "hello",
+            "number": 42,
+            "double": 3.14,
+            "bool": true,
+            "array": [1, 2, 3]
+        ])
+        let data = try JSONEncoder().encode(anyCodable)
+        let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+        
+        let dict = decoded.value as? [String: Any]
+        XCTAssertEqual(dict?["string"] as? String, "hello")
+        XCTAssertEqual(dict?["number"] as? Int, 42)
+        XCTAssertEqual(dict?["bool"] as? Bool, true)
+    }
+    
+    // MARK: - AnyCodable Encoding Edge Cases
+    
+    func testAnyCodableEncodingUnsupportedType() {
+        // Create an AnyCodable with a type that can't be encoded
+        class CustomClass {}
+        let anyCodable = AnyCodable(CustomClass())
+        
+        // Encoding should throw
+        XCTAssertThrowsError(try JSONEncoder().encode(anyCodable)) { error in
+            XCTAssertTrue(error is EncodingError)
+        }
+    }
+    
+    func testAnyCodableDecodingInvalidData() {
+        // Try to decode something that doesn't match any supported type
+        // Actually, all JSON types are supported, so this is hard to test
+        // Let's test with valid data to ensure decode paths work
+        let jsonTypes: [(String, Any.Type)] = [
+            ("42", Int.self),
+            ("3.14", Double.self),
+            ("\"hello\"", String.self),
+            ("true", Bool.self),
+            ("[1,2,3]", Array<Any>.self),
+            ("{\"a\":1}", Dictionary<String, Any>.self),
+            ("null", NSNull.self)
+        ]
+        
+        for (jsonString, _) in jsonTypes {
+            let data = jsonString.data(using: .utf8)!
+            XCTAssertNoThrow(try JSONDecoder().decode(AnyCodable.self, from: data))
+        }
+    }
+    
+    func testAnyCodableRoundTrip() throws {
+        let values: [Any] = [
+            42,
+            3.14,
+            "hello",
+            true,
+            false,
+            [1, 2, 3],
+            ["key": "value"],
+            NSNull()
+        ]
+        
+        for value in values {
+            let encoded = AnyCodable(value)
+            let data = try JSONEncoder().encode(encoded)
+            let decoded = try JSONDecoder().decode(AnyCodable.self, from: data)
+            
+            // Just verify it doesn't throw
+            XCTAssertNotNil(decoded.value)
+        }
+    }
+    
+    // MARK: - JSONRPCError Additional Tests
+    
+    func testJSONRPCErrorWithDataDecoding() throws {
+        let json = """
+        {"code": -32600, "message": "Invalid", "data": {"detail": "extra info"}}
+        """
+        let data = json.data(using: .utf8)!
+        let error = try JSONDecoder().decode(JSONRPCError.self, from: data)
+        
+        XCTAssertEqual(error.code, -32600)
+        XCTAssertNotNil(error.data)
+    }
+    
+    // MARK: - Response Edge Cases
+    
+    func testJSONRPCResponseWithBothResultAndError() throws {
+        // Technically invalid per spec, but should decode
+        let json = """
+        {"jsonrpc": "2.0", "id": 1, "result": "ok", "error": {"code": -1, "message": "err"}}
+        """
+        let data = json.data(using: .utf8)!
+        let response = try JSONDecoder().decode(JSONRPCResponse.self, from: data)
+        
+        XCTAssertNotNil(response.result)
+        XCTAssertNotNil(response.error)
+        XCTAssertTrue(response.isError) // isError should be true if error exists
+    }
+    
+    func testJSONRPCResponseWithNeitherResultNorError() throws {
+        let json = """
+        {"jsonrpc": "2.0", "id": 1}
+        """
+        let data = json.data(using: .utf8)!
+        let response = try JSONDecoder().decode(JSONRPCResponse.self, from: data)
+        
+        XCTAssertNil(response.result)
+        XCTAssertNil(response.error)
+        XCTAssertFalse(response.isError)
+    }
 }

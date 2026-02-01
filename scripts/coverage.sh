@@ -5,7 +5,8 @@
 set -e
 
 echo "🧪 Running tests with coverage..."
-swift test --enable-code-coverage --parallel
+# Run without --parallel to avoid concurrency issues that cause hangs
+swift test --enable-code-coverage
 
 echo ""
 echo "📊 Generating coverage report..."

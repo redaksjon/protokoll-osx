@@ -7,7 +7,7 @@ public actor MCPClient {
     
     // MARK: - Properties
     
-    private let transport: StdioTransport
+    private let transport: any MCPTransport
     private let logger: Logger
     private var nextRequestId: Int = 1
     private var pendingRequests: [Int: CheckedContinuation<JSONRPCResponse, Error>] = [:]
@@ -17,7 +17,7 @@ public actor MCPClient {
     
     // MARK: - Initialization
     
-    public init(transport: StdioTransport, logger: Logger = Logger(subsystem: "com.protokoll.mcp", category: "client")) {
+    public init(transport: any MCPTransport, logger: Logger = Logger(subsystem: "com.protokoll.mcp", category: "client")) {
         self.transport = transport
         self.logger = logger
     }
