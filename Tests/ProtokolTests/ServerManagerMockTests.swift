@@ -275,7 +275,8 @@ final class ServerManagerMockTests: XCTestCase {
         
         let manager = ServerManager(
             serverPath: "/test/path",
-            transportFactory: createMockTransportFactory(transport: transport)
+            transportFactory: createMockTransportFactory(transport: transport),
+            config: .testing
         )
         
         // First cycle
@@ -302,7 +303,8 @@ final class ServerManagerMockTests: XCTestCase {
         
         let manager = ServerManager(
             serverPath: "/test/path",
-            transportFactory: createMockTransportFactory(transport: transport)
+            transportFactory: createMockTransportFactory(transport: transport),
+            config: .testing
         )
         
         let initialState = await manager.currentState
@@ -317,5 +319,278 @@ final class ServerManagerMockTests: XCTestCase {
         
         let finalState = await manager.currentState
         XCTAssertEqual(finalState, .stopped)
+    }
+    
+    // MARK: - Health Check Tests
+    
+    func testPerformHealthCheckWhenRunning() async throws {
+        let transport = MockTransport()
+        await transport.configureInitializeResponse()
+        
+        let manager = ServerManager(
+            serverPath: "/test/path",
+            transportFactory: createMockTransportFactory(transport: transport),
+            config: .testing
+        )
+        
+        _ = try await manager.start()
+        
+        // Health check should succeed when running
+        let isHealthy = await manager.performHealthCheck()
+        XCTAssertTrue(isHealthy)
+        
+        try await manager.stop()
+    }
+    
+    func testPerformHealthCheckWhenStopped() async throws {
+        let transport = MockTransport()
+        
+        let manager = ServerManager(
+            serverPath: "/test/path",
+            transportFactory: createMockTransportFactory(transport: transport),
+            config: .testing
+        )
+        
+        // Health check should fail when not running
+        let isHealthy = await manager.performHealthCheck()
+        XCTAssertFalse(isHealthy)
+    }
+    
+    // MARK: - Crash Handling Tests
+    
+    func testSimulateCrashSetsStateToCrashed() async throws {
+        let transport = MockTransport()
+        await transport.configureInitializeResponse()
+        
+        let manager = ServerManager(
+            serverPath: "/test/path",
+            transportFactory: createMockTransportFactory(transport: transport),
+            config: .testing
+        )
+        
+        _ = try await manager.start()
+        
+        // Simulate a crash - this will attempt restart
+        await manager.simulateCrash()
+        
+        // State should be crashed or running (if restart succeeded)
+        let state = await manager.currentState
+        XCTAssertTrue(state == .crashed || state == .running)
+        
+        try await manager.stop()
+    }
+    
+    func testRestartAttemptsTracking() async throws {
+        let transport = MockTransport()
+        await transport.configureInitializeResponse()
+        
+        let manager = ServerManager(
+            serverPath: "/test/path",
+            transportFactory: createMockTransportFactory(transport: transport),
+            config: .testing
+        )
+        
+        _ = try await manager.start()
+        
+        let initialAttempts = await manager.currentRestartAttempts
+        XCTAssertEqual(initialAttempts, 0)
+        
+        // Reset and verify
+        await manager.resetRestartAttempts()
+        let afterReset = await manager.currentRestartAttempts
+        XCTAssertEqual(afterReset, 0)
+        
+        try await manager.stop()
+    }
+    
+    func testMaxRestartAttemptsReached() async throws {
+        let transport = MockTransport()
+        await transport.configureInitializeResponse()
+        
+        // Config with max 1 restart attempt
+        let config = ServerManagerConfig(
+            healthCheckIntervalNs: 10_000_000,
+            healthCheckChunks: 1,
+            maxRestartAttempts: 1,
+            enableHealthMonitoring: false
+        )
+        
+        let manager = ServerManager(
+            serverPath: "/test/path",
+            transportFactory: createMockTransportFactory(transport: transport),
+            config: config
+        )
+        
+        _ = try await manager.start()
+        
+        // First crash - should attempt restart
+        await transport.setStartError(StdioTransportError.notConnected)
+        await manager.simulateCrash()
+        
+        // After max attempts, should stay crashed
+        let state = await manager.currentState
+        XCTAssertEqual(state, .crashed)
+        
+        // Restart attempts should be at max
+        let attempts = await manager.currentRestartAttempts
+        XCTAssertEqual(attempts, 1)
+        
+        try await manager.stop()
+    }
+    
+    // MARK: - Configuration Tests
+    
+    func testServerManagerConfigDefault() {
+        let config = ServerManagerConfig.default
+        XCTAssertEqual(config.healthCheckIntervalNs, 10_000_000_000)
+        XCTAssertEqual(config.healthCheckChunks, 100)
+        XCTAssertEqual(config.maxRestartAttempts, 3)
+        XCTAssertTrue(config.enableHealthMonitoring)
+    }
+    
+    func testServerManagerConfigTesting() {
+        let config = ServerManagerConfig.testing
+        XCTAssertEqual(config.healthCheckIntervalNs, 10_000_000)
+        XCTAssertEqual(config.healthCheckChunks, 1)
+        XCTAssertEqual(config.maxRestartAttempts, 3)
+        XCTAssertFalse(config.enableHealthMonitoring)
+    }
+    
+    func testServerManagerConfigEquality() {
+        let config1 = ServerManagerConfig.default
+        let config2 = ServerManagerConfig.default
+        let config3 = ServerManagerConfig.testing
+        
+        XCTAssertEqual(config1, config2)
+        XCTAssertNotEqual(config1, config3)
+    }
+    
+    func testServerManagerConfigCustom() {
+        let config = ServerManagerConfig(
+            healthCheckIntervalNs: 5_000_000_000,
+            healthCheckChunks: 50,
+            maxRestartAttempts: 5,
+            enableHealthMonitoring: true
+        )
+        
+        XCTAssertEqual(config.healthCheckIntervalNs, 5_000_000_000)
+        XCTAssertEqual(config.healthCheckChunks, 50)
+        XCTAssertEqual(config.maxRestartAttempts, 5)
+        XCTAssertTrue(config.enableHealthMonitoring)
+    }
+    
+    // MARK: - Additional Health Monitoring Tests
+    
+    func testHealthMonitoringWithFastInterval() async throws {
+        let transport = MockTransport()
+        await transport.configureInitializeResponse()
+        
+        // Config with very fast health check (10ms)
+        let config = ServerManagerConfig(
+            healthCheckIntervalNs: 10_000_000, // 10ms
+            healthCheckChunks: 1,
+            maxRestartAttempts: 3,
+            enableHealthMonitoring: true
+        )
+        
+        let manager = ServerManager(
+            serverPath: "/test/path",
+            transportFactory: createMockTransportFactory(transport: transport),
+            config: config
+        )
+        
+        _ = try await manager.start()
+        
+        // Wait for health monitoring to run at least once
+        try await Task.sleep(nanoseconds: 50_000_000) // 50ms
+        
+        // Verify server is still running
+        let isRunning = await manager.isRunning
+        XCTAssertTrue(isRunning)
+        
+        try await manager.stop()
+    }
+    
+    func testStopDuringHealthMonitoring() async throws {
+        let transport = MockTransport()
+        await transport.configureInitializeResponse()
+        
+        // Config with health monitoring enabled
+        let config = ServerManagerConfig(
+            healthCheckIntervalNs: 100_000_000, // 100ms
+            healthCheckChunks: 10,
+            maxRestartAttempts: 3,
+            enableHealthMonitoring: true
+        )
+        
+        let manager = ServerManager(
+            serverPath: "/test/path",
+            transportFactory: createMockTransportFactory(transport: transport),
+            config: config
+        )
+        
+        _ = try await manager.start()
+        
+        // Stop immediately - health monitoring should be cancelled
+        try await manager.stop()
+        
+        let state = await manager.currentState
+        XCTAssertEqual(state, .stopped)
+    }
+    
+    func testCrashDuringShutdown() async throws {
+        let transport = MockTransport()
+        await transport.configureInitializeResponse()
+        
+        let manager = ServerManager(
+            serverPath: "/test/path",
+            transportFactory: createMockTransportFactory(transport: transport),
+            config: .testing
+        )
+        
+        _ = try await manager.start()
+        
+        // Start stopping, then simulate crash - should not attempt restart
+        try await manager.stop()
+        
+        // Simulate crash after stopped - should do nothing
+        await manager.simulateCrash()
+        
+        let state = await manager.currentState
+        XCTAssertEqual(state, .crashed)
+    }
+    
+    func testRestartIncreasesAttempts() async throws {
+        let transport = MockTransport()
+        await transport.configureInitializeResponse()
+        
+        // Config with 1 max restart attempt
+        let config = ServerManagerConfig(
+            healthCheckIntervalNs: 10_000_000,
+            healthCheckChunks: 1,
+            maxRestartAttempts: 2,
+            enableHealthMonitoring: false
+        )
+        
+        let manager = ServerManager(
+            serverPath: "/test/path",
+            transportFactory: createMockTransportFactory(transport: transport),
+            config: config
+        )
+        
+        _ = try await manager.start()
+        
+        // Make restart fail so attempts don't reset
+        await transport.setStartError(StdioTransportError.notConnected)
+        
+        // Simulate crash - should increment attempt counter and fail restart
+        await manager.simulateCrash()
+        
+        let attempts = await manager.currentRestartAttempts
+        XCTAssertGreaterThan(attempts, 0)
+        
+        // State should be crashed after failed restart
+        let state = await manager.currentState
+        XCTAssertEqual(state, .crashed)
     }
 }

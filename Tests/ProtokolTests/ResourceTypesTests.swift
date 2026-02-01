@@ -348,4 +348,16 @@ final class ResourceTypesTests: XCTestCase {
         XCTAssertEqual(transcript?.uri, "protokoll://transcript/test.md")
         XCTAssertEqual(transcript?.time, "14:30")
     }
+    
+    // MARK: - ProtokolResourceURI Entity Case
+    
+    func testEntityURI() {
+        let uri = ProtokolResourceURI.entity(type: "person", id: "123")
+        XCTAssertEqual(uri.uri, "protokoll://entity/person/123")
+    }
+    
+    func testEntityURIWithSpecialCharacters() {
+        let uri = ProtokolResourceURI.entity(type: "company", id: "abc-def-456")
+        XCTAssertEqual(uri.uri, "protokoll://entity/company/abc-def-456")
+    }
 }

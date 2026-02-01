@@ -594,6 +594,75 @@ final class MCPClientResourcesMockTests: XCTestCase {
         try await client.stop()
     }
     
+    func testListEntitiesResourceNoText() async throws {
+        let transport = MockTransport()
+        await transport.configureInitializeResponse()
+        
+        // Response with no text field - covers the noResult branch
+        let readResponse = """
+        {"contents":[{"uri":"protokoll://entities/person","mimeType":"application/json"}]}
+        """
+        await transport.setRawResponse(for: "resources/read", json: readResponse)
+        
+        let client = MCPClient(transport: transport)
+        try await client.start()
+        
+        do {
+            _ = try await client.listEntitiesResource(type: "person")
+            XCTFail("Expected noResult error")
+        } catch let error as MCPClientError {
+            if case .noResult = error { /* Expected */ }
+        }
+        
+        try await client.stop()
+    }
+    
+    func testGetConfigResourceNoText() async throws {
+        let transport = MockTransport()
+        await transport.configureInitializeResponse()
+        
+        // Response with no text field
+        let readResponse = """
+        {"contents":[{"uri":"protokoll://config","mimeType":"application/json"}]}
+        """
+        await transport.setRawResponse(for: "resources/read", json: readResponse)
+        
+        let client = MCPClient(transport: transport)
+        try await client.start()
+        
+        do {
+            _ = try await client.getConfigResource()
+            XCTFail("Expected noResult error")
+        } catch let error as MCPClientError {
+            if case .noResult = error { /* Expected */ }
+        }
+        
+        try await client.stop()
+    }
+    
+    func testListTranscriptsResourceNoText() async throws {
+        let transport = MockTransport()
+        await transport.configureInitializeResponse()
+        
+        // Response with no text field
+        let readResponse = """
+        {"contents":[{"uri":"protokoll://transcripts","mimeType":"application/json"}]}
+        """
+        await transport.setRawResponse(for: "resources/read", json: readResponse)
+        
+        let client = MCPClient(transport: transport)
+        try await client.start()
+        
+        do {
+            _ = try await client.listTranscriptsResource(directory: "/output")
+            XCTFail("Expected noResult error")
+        } catch let error as MCPClientError {
+            if case .noResult = error { /* Expected */ }
+        }
+        
+        try await client.stop()
+    }
+    
     // MARK: - Additional Edge Cases
     
     func testNotInitializedErrorDescription() async throws {
@@ -623,5 +692,26 @@ final class MCPClientResourcesMockTests: XCTestCase {
         let error = MCPClientError.decodingError(TestDecodingError())
         
         XCTAssertTrue(error.errorDescription?.contains("Decoding error") == true)
+    }
+    
+    func testNoResultErrorDescription() async throws {
+        let error = MCPClientError.noResult
+        XCTAssertEqual(error.errorDescription, "No result in response")
+    }
+    
+    func testServerErrorErrorDescription() async throws {
+        let error = MCPClientError.serverError(code: -32600, message: "Invalid Request")
+        XCTAssertTrue(error.errorDescription?.contains("Server error") == true)
+        XCTAssertTrue(error.errorDescription?.contains("-32600") == true)
+        XCTAssertTrue(error.errorDescription?.contains("Invalid Request") == true)
+    }
+    
+    // Test JSONRPCResponse.isError
+    func testJSONRPCResponseIsError() {
+        let errorResponse = JSONRPCResponse(id: 1, error: JSONRPCError(code: -1, message: "Error"))
+        XCTAssertTrue(errorResponse.isError)
+        
+        let successResponse = JSONRPCResponse(id: 1, result: AnyCodable("success"))
+        XCTAssertFalse(successResponse.isError)
     }
 }
