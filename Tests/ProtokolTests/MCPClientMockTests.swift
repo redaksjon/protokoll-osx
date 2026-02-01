@@ -714,4 +714,110 @@ final class MCPClientResourcesMockTests: XCTestCase {
         let successResponse = JSONRPCResponse(id: 1, result: AnyCodable("success"))
         XCTAssertFalse(successResponse.isError)
     }
+    
+    // Test unknown request ID handling in receive loop
+    func testReceiveLoopUnknownRequestID() async throws {
+        let transport = MockTransport()
+        await transport.configureInitializeResponse()
+        
+        let client = MCPClient(transport: transport)
+        try await client.start()
+        
+        // Queue a response with an ID that wasn't requested (9999)
+        let unexpectedResponse = """
+        {"jsonrpc":"2.0","id":9999,"result":{"unexpected":"data"}}
+        """
+        await transport.queueResponse(unexpectedResponse.data(using: .utf8)!)
+        
+        // Give receive loop time to process
+        try await Task.sleep(nanoseconds: 50_000_000) // 50ms
+        
+        // Client should still be functional
+        let isReady = await client.isReady
+        XCTAssertTrue(isReady)
+        
+        try await client.stop()
+    }
+    
+    // Test receive loop error handling
+    func testReceiveLoopErrorWhileRunning() async throws {
+        let transport = MockTransport()
+        await transport.configureInitializeResponse()
+        
+        let client = MCPClient(transport: transport)
+        try await client.start()
+        
+        // Queue invalid JSON to trigger decode error in receive loop
+        let invalidJSON = "not valid json at all"
+        await transport.queueResponse(invalidJSON.data(using: .utf8)!)
+        
+        // Give receive loop time to hit the error
+        try await Task.sleep(nanoseconds: 50_000_000) // 50ms
+        
+        // Client should handle this gracefully
+        try await client.stop()
+    }
+    
+    // Test stop cancels pending requests
+    func testStopCancelsPendingRequests() async throws {
+        let transport = MockTransport()
+        await transport.configureInitializeResponse()
+        
+        let client = MCPClient(transport: transport)
+        try await client.start()
+        
+        // Don't configure a response for tools/list - it will be pending
+        // Start a request in a background task
+        let requestTask = Task<Void, Never> {
+            do {
+                let _: ListToolsResponse = try await client.sendRequest(method: "tools/list")
+            } catch {
+                // Expected - should get clientStopped error
+            }
+        }
+        
+        // Give request time to be registered as pending
+        try await Task.sleep(nanoseconds: 20_000_000) // 20ms
+        
+        // Stop client - should cancel pending request
+        try await client.stop()
+        
+        // Wait for request task
+        _ = await requestTask.value
+    }
+    
+    // Test sendRequest with array params (non-dictionary JSON)
+    func testSendRequestWithArrayParams() async throws {
+        let transport = MockTransport()
+        await transport.configureInitializeResponse()
+        
+        // Configure response for our test method
+        let testResponse = """
+        {"result":"ok"}
+        """
+        await transport.setRawResponse(for: "test/array", json: testResponse)
+        
+        let client = MCPClient(transport: transport)
+        try await client.start()
+        
+        // Send an array as params - this will serialize to JSON array, not dictionary
+        // This covers the else branch at line 114 where anyParams = nil
+        struct ArrayWrapper: Encodable {
+            let items = [1, 2, 3]
+            
+            func encode(to encoder: Encoder) throws {
+                var container = encoder.singleValueContainer()
+                try container.encode(items)
+            }
+        }
+        
+        let response: AnyCodable = try await client.sendRequest(
+            method: "test/array",
+            params: ArrayWrapper()
+        )
+        
+        XCTAssertNotNil(response)
+        
+        try await client.stop()
+    }
 }

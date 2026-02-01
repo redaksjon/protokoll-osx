@@ -360,4 +360,26 @@ final class ResourceTypesTests: XCTestCase {
         let uri = ProtokolResourceURI.entity(type: "company", id: "abc-def-456")
         XCTAssertEqual(uri.uri, "protokoll://entity/company/abc-def-456")
     }
+    
+    // Test TranscriptsListResource convenience accessors
+    func testTranscriptsListResourceConvenienceAccessors() throws {
+        let json = """
+        {
+            "directory": "/output",
+            "transcripts": [],
+            "pagination": {
+                "total": 42,
+                "limit": 50,
+                "offset": 0,
+                "hasMore": true
+            }
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let resource = try JSONDecoder().decode(TranscriptsListResource.self, from: data)
+        
+        // Test convenience accessors
+        XCTAssertEqual(resource.total, 42)
+        XCTAssertEqual(resource.hasMore, true)
+    }
 }

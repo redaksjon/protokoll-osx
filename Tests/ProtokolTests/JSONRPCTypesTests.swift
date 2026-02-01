@@ -348,6 +348,25 @@ final class JSONRPCTypesTests: XCTestCase {
         }
     }
     
+    // Test JSONRPCResponse initializer with all parameters
+    func testJSONRPCResponseInitializer() {
+        // Test with result
+        let successResponse = JSONRPCResponse(jsonrpc: "2.0", id: 1, result: AnyCodable("success"), error: nil)
+        XCTAssertEqual(successResponse.id, 1)
+        XCTAssertNotNil(successResponse.result)
+        XCTAssertNil(successResponse.error)
+        
+        // Test with error
+        let errorResponse = JSONRPCResponse(jsonrpc: "2.0", id: 2, result: nil, error: JSONRPCError(code: -1, message: "Error"))
+        XCTAssertEqual(errorResponse.id, 2)
+        XCTAssertNil(errorResponse.result)
+        XCTAssertNotNil(errorResponse.error)
+        
+        // Test with default jsonrpc
+        let defaultResponse = JSONRPCResponse(id: 3, result: AnyCodable(42))
+        XCTAssertEqual(defaultResponse.jsonrpc, "2.0")
+    }
+    
     func testAnyCodableRoundTrip() throws {
         let values: [Any] = [
             42,
