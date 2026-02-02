@@ -5,13 +5,13 @@
   "type": "module",
   "scripts": {
     "build": "swift build -c release",
-    "build:debug": "swift build -c debug",
+    "build:debug": "echo 'Building Swift package...' && swift build -c debug && echo 'Build complete!'",
     "test": "./scripts/coverage.sh",
     "test:coverage": "./scripts/coverage.sh",
     "lint": "echo 'Swift linting skipped - consider installing SwiftLint: brew install swiftlint'",
     "lint:fix": "echo 'Swift linting skipped - consider installing SwiftLint: brew install swiftlint && swiftlint --fix'",
     "clean": "swift package clean && rm -rf .build coverage Protokoll.app",
-    "precommit": "npm run build:debug && npm run test",
+    "precommit": "echo '🔨 Building debug...' && npm run build:debug && echo '✅ Build complete' && echo '🧪 Running tests...' && npm run test && echo '✅ Precommit checks complete'",
     "prepublishOnly": "npm run clean && npm run build",
     "resolve": "swift package resolve",
     "xcode": "open Package.swift"
