@@ -27,8 +27,9 @@ public extension MCPClient {
     // MARK: - Convenience Methods
     
     /// List transcripts via resource (preferred over tool)
+    /// Pass nil or empty directory to let the server use its own configured output directory
     func listTranscriptsResource(
-        directory: String,
+        directory: String? = nil,
         limit: Int = 50,
         offset: Int = 0
     ) async throws -> TranscriptsListResource {
