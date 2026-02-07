@@ -38,9 +38,27 @@ public actor StdioTransport: MCPTransport {
     public func start() async throws {
         logger.info("Starting stdio transport with server: \(self.serverPath)")
         
+        // Check if file exists
         guard FileManager.default.fileExists(atPath: serverPath) else {
             logger.error("Server not found at: \(self.serverPath)")
             throw StdioTransportError.serverNotFound(path: serverPath)
+        }
+        
+        // Check if it's a directory (can't execute a directory)
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: serverPath, isDirectory: &isDirectory), isDirectory.boolValue {
+            logger.error("Server path is a directory: \(self.serverPath)")
+            throw StdioTransportError.serverNotFound(path: serverPath)
+        }
+        
+        // Check if file is executable
+        guard FileManager.default.isExecutableFile(atPath: serverPath) else {
+            logger.error("Server file is not executable: \(self.serverPath)")
+            throw StdioTransportError.failedToStart(error: NSError(
+                domain: "StdioTransport",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "File is not executable: \(serverPath)"]
+            ))
         }
         
         // Create pipes
