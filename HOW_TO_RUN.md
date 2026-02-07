@@ -117,6 +117,22 @@ Look for:
 [com.protokoll.app:transcripts] Loaded X transcripts
 ```
 
+## Connecting to a remote MCP server
+
+By default the app runs the **protokoll-mcp** Node server as a subprocess (stdio). To use a **remote** MCP server (e.g. one already running at `http://localhost:3001/mcp`):
+
+1. Start your MCP server (e.g. `./scripts/start-protokoll-mcp.sh` in your activity directory).
+2. In the app: **Settings → Advanced**.
+3. Set **Remote MCP URL** to `http://localhost:3001/mcp` (or your server’s URL).
+4. Restart the app (or reconnect). The app will connect via HTTP/SSE instead of launching the Node process.
+
+Leave **Remote MCP URL** empty to keep the default stdio (subprocess) behavior.
+
+## Debugging MCP
+
+- **In-app log:** **Settings → Advanced** → scroll to **MCP debug log**. This shows a rolling log of each request/response (e.g. `→ initialize id:1`, `← initialize id:1 ok`). Use **Clear** to reset. Handy for seeing if the server is reached and what failed.
+- **Console.app:** For transport-level detail (SSE connection, POST URL, session id, bytes), open **Console.app**, filter by `com.protokoll.mcp` or subsystem `Protokoll`, and watch while you use the app or click Reconnect.
+
 ## Troubleshooting
 
 ### App doesn't launch
