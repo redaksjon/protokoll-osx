@@ -1,0 +1,46 @@
+# Swift build artifacts
+.build/
+.swiftpm/
+Package.resolved
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+
+# macOS system files
+.DS_Store
+._*
+
+# Build products
+*.app
+*.dSYM
+
+# Test coverage
+coverage/
+*.profdata
+*.profraw
+
+# Scripts (keep only what's needed)
+*.sh
+!scripts/coverage.sh
+
+# Documentation (keep README, ignore others)
+*.md
+!README.md
+
+# Git
+.git/
+.gitignore
+
+# CI/CD
+.github/
+
+# Editor
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/

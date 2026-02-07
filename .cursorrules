@@ -1,0 +1,13 @@
+# Protokoll macOS
+
+## MCP (Model Context Protocol)
+
+When implementing or changing **MCP transport or protocol code** (e.g. in `Sources/ProtokolLib/MCP/`):
+
+1. **Use the official spec first.** Do not implement from a high-level description only. Check:
+   - [MCP Transports](https://modelcontextprotocol.io/specification/2024-11-05/basic/transports) for HTTP/SSE and stdio requirements (including **session ID**, endpoint event format, headers).
+   - [MCP Messages](https://modelcontextprotocol.io/specification/2024-11-05/basic/messages) and [Lifecycle](https://modelcontextprotocol.io/specification/2024-11-05/basic/lifecycle) for JSON-RPC and handshake.
+
+2. **Run through the project checklist.** Before shipping transport or client changes, verify each relevant item in **`MCP_SPEC_CHECKLIST.md`** (session ID, endpoint event parsing, message events, headers).
+
+3. **Anticipate server requirements.** Common requirements that are easy to miss if you only code the “happy path”: session ID on POST, correct Accept/Content-Type headers, support for both JSON and plain-URI endpoint event data, relative vs absolute endpoint URLs.

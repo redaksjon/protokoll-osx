@@ -1,0 +1,37 @@
+{
+  "name": "@redaksjon/protokoll-osx",
+  "version": "0.1.0",
+  "description": "Native macOS application for Protokoll - intelligent audio transcription",
+  "type": "module",
+  "scripts": {
+    "build": "swift build -c release",
+    "build:debug": "echo 'Building Swift package...' && swift build -c debug && echo 'Build complete!'",
+    "test": "./scripts/coverage.sh",
+    "test:coverage": "./scripts/coverage.sh",
+    "lint": "echo 'Swift linting skipped - consider installing SwiftLint: brew install swiftlint'",
+    "lint:fix": "echo 'Swift linting skipped - consider installing SwiftLint: brew install swiftlint && swiftlint --fix'",
+    "clean": "swift package clean && rm -rf .build coverage Protokoll.app",
+    "precommit": "echo '🔨 Building debug...' && npm run build:debug && echo '✅ Build complete' && echo '🧪 Running tests...' && npm run test && echo '✅ Precommit checks complete'",
+    "prepublishOnly": "npm run clean && npm run build",
+    "resolve": "swift package resolve",
+    "xcode": "open Package.swift"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/redaksjon/protokoll-osx.git"
+  },
+  "homepage": "https://github.com/redaksjon/protokoll-osx",
+  "keywords": [
+    "protokoll",
+    "transcription",
+    "macos",
+    "swift",
+    "swiftui",
+    "mcp"
+  ],
+  "author": "Tim O'Brien <tobrien@discursive.com>",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

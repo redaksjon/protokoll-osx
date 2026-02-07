@@ -89,4 +89,121 @@ final class MCPTypesTests: XCTestCase {
         XCTAssertEqual(MCPErrorCode.serverNotInitialized.rawValue, -32002)
         XCTAssertEqual(MCPErrorCode.unknownError.rawValue, -32001)
     }
+    
+    // MARK: - Additional ClientCapabilities Tests
+    
+    func testSamplingCapabilityCreation() {
+        let sampling = ClientCapabilities.SamplingCapability()
+        XCTAssertNotNil(sampling)
+    }
+    
+    func testRootsCapabilityCreation() {
+        let roots = ClientCapabilities.RootsCapability()
+        XCTAssertNil(roots.listChanged)
+        
+        let rootsWithValue = ClientCapabilities.RootsCapability(listChanged: false)
+        XCTAssertEqual(rootsWithValue.listChanged, false)
+    }
+    
+    func testClientCapabilitiesWithSampling() {
+        let capabilities = ClientCapabilities(
+            roots: nil,
+            sampling: ClientCapabilities.SamplingCapability()
+        )
+        
+        XCTAssertNil(capabilities.roots)
+        XCTAssertNotNil(capabilities.sampling)
+    }
+    
+    func testClientCapabilitiesWithBoth() {
+        let capabilities = ClientCapabilities(
+            roots: ClientCapabilities.RootsCapability(listChanged: true),
+            sampling: ClientCapabilities.SamplingCapability()
+        )
+        
+        XCTAssertNotNil(capabilities.roots)
+        XCTAssertNotNil(capabilities.sampling)
+        XCTAssertTrue(capabilities.roots?.listChanged ?? false)
+    }
+    
+    // MARK: - ServerCapabilities Tests
+    
+    func testServerCapabilitiesDecoding() throws {
+        let json = """
+        {
+            "tools": {"listChanged": true},
+            "resources": {"subscribe": true, "listChanged": false},
+            "prompts": {"listChanged": true}
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let capabilities = try JSONDecoder().decode(ServerCapabilities.self, from: data)
+        
+        XCTAssertNotNil(capabilities.tools)
+        XCTAssertEqual(capabilities.tools?.listChanged, true)
+        XCTAssertNotNil(capabilities.resources)
+        XCTAssertEqual(capabilities.resources?.subscribe, true)
+        XCTAssertEqual(capabilities.resources?.listChanged, false)
+        XCTAssertNotNil(capabilities.prompts)
+        XCTAssertEqual(capabilities.prompts?.listChanged, true)
+    }
+    
+    func testServerCapabilitiesDecodingPartial() throws {
+        let json = """
+        {
+            "tools": {"listChanged": false}
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let capabilities = try JSONDecoder().decode(ServerCapabilities.self, from: data)
+        
+        XCTAssertNotNil(capabilities.tools)
+        XCTAssertNil(capabilities.resources)
+        XCTAssertNil(capabilities.prompts)
+    }
+    
+    // MARK: - ServerInfo Tests
+    
+    func testServerInfoDecoding() throws {
+        let json = """
+        {"name": "TestServer", "version": "2.0.0"}
+        """
+        let data = json.data(using: .utf8)!
+        let info = try JSONDecoder().decode(ServerInfo.self, from: data)
+        
+        XCTAssertEqual(info.name, "TestServer")
+        XCTAssertEqual(info.version, "2.0.0")
+    }
+    
+    func testServerInfoEquality() throws {
+        let json1 = "{\"name\": \"Server\", \"version\": \"1.0\"}"
+        let json2 = "{\"name\": \"Server\", \"version\": \"1.0\"}"
+        let json3 = "{\"name\": \"Server\", \"version\": \"2.0\"}"
+        
+        let info1 = try JSONDecoder().decode(ServerInfo.self, from: json1.data(using: .utf8)!)
+        let info2 = try JSONDecoder().decode(ServerInfo.self, from: json2.data(using: .utf8)!)
+        let info3 = try JSONDecoder().decode(ServerInfo.self, from: json3.data(using: .utf8)!)
+        
+        XCTAssertEqual(info1, info2)
+        XCTAssertNotEqual(info1, info3)
+    }
+    
+    // MARK: - MCPInitializeResponse Tests
+    
+    func testMCPInitializeResponseDecoding() throws {
+        let json = """
+        {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {"tools": {"listChanged": true}},
+            "serverInfo": {"name": "protokoll-mcp", "version": "0.0.12"}
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let response = try JSONDecoder().decode(MCPInitializeResponse.self, from: data)
+        
+        XCTAssertEqual(response.protocolVersion, "2024-11-05")
+        XCTAssertEqual(response.serverInfo.name, "protokoll-mcp")
+        XCTAssertEqual(response.serverInfo.version, "0.0.12")
+        XCTAssertNotNil(response.capabilities.tools)
+    }
 }

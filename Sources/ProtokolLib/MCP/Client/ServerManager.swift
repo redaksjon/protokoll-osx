@@ -1,6 +1,48 @@
 import Foundation
 import OSLog
 
+/// Type alias for transport factory closure
+public typealias TransportFactory = @Sendable (String, Logger) -> any MCPTransport
+
+/// Configuration for ServerManager health monitoring
+public struct ServerManagerConfig: Sendable, Equatable {
+    /// Interval between health checks in nanoseconds
+    public let healthCheckIntervalNs: UInt64
+    /// Number of chunks to break the health check interval into (for cancellation responsiveness)
+    public let healthCheckChunks: Int
+    /// Maximum restart attempts before giving up
+    public let maxRestartAttempts: Int
+    /// Whether to enable automatic health monitoring
+    public let enableHealthMonitoring: Bool
+    
+    public static let `default` = ServerManagerConfig(
+        healthCheckIntervalNs: 10_000_000_000, // 10 seconds
+        healthCheckChunks: 100,
+        maxRestartAttempts: 3,
+        enableHealthMonitoring: true
+    )
+    
+    /// Configuration for fast testing with minimal delays
+    public static let testing = ServerManagerConfig(
+        healthCheckIntervalNs: 10_000_000, // 10ms
+        healthCheckChunks: 1,
+        maxRestartAttempts: 3,
+        enableHealthMonitoring: false
+    )
+    
+    public init(
+        healthCheckIntervalNs: UInt64 = 10_000_000_000,
+        healthCheckChunks: Int = 100,
+        maxRestartAttempts: Int = 3,
+        enableHealthMonitoring: Bool = true
+    ) {
+        self.healthCheckIntervalNs = healthCheckIntervalNs
+        self.healthCheckChunks = healthCheckChunks
+        self.maxRestartAttempts = maxRestartAttempts
+        self.enableHealthMonitoring = enableHealthMonitoring
+    }
+}
+
 /// Manages the lifecycle of the protokoll-mcp server
 @available(macOS 14.0, *)
 public actor ServerManager {
@@ -8,12 +50,16 @@ public actor ServerManager {
     // MARK: - Properties
     
     private let serverPath: String
+    /// When set, connect to remote MCP server via HTTP/SSE instead of spawning stdio process.
+    private let serverURL: URL?
     private let logger: Logger
-    private var transport: StdioTransport?
+    private let transportFactory: TransportFactory
+    private let config: ServerManagerConfig
+    private var transport: (any MCPTransport)?
     private var client: MCPClient?
     private var restartAttempts: Int = 0
-    private let maxRestartAttempts: Int = 3
     private var isShuttingDown: Bool = false
+    private var healthMonitoringTask: Task<Void, Never>?
     
     // MARK: - State
     
@@ -37,12 +83,23 @@ public actor ServerManager {
     
     // MARK: - Initialization
     
+    /// Default transport factory that creates StdioTransport
+    public static let defaultTransportFactory: TransportFactory = { path, logger in
+        StdioTransport(serverPath: path, logger: logger)
+    }
+    
     public init(
         serverPath: String = NSHomeDirectory() + "/.nvm/versions/node/v24.8.0/bin/protokoll-mcp",
-        logger: Logger = Logger(subsystem: "com.protokoll.mcp", category: "server")
+        serverURL: URL? = nil,
+        logger: Logger = Logger(subsystem: "com.protokoll.mcp", category: "server"),
+        transportFactory: TransportFactory? = nil,
+        config: ServerManagerConfig = .default
     ) {
         self.serverPath = serverPath
+        self.serverURL = serverURL
         self.logger = logger
+        self.transportFactory = transportFactory ?? ServerManager.defaultTransportFactory
+        self.config = config
     }
     
     // MARK: - Lifecycle
@@ -61,8 +118,13 @@ public actor ServerManager {
         logger.info("Starting server")
         
         do {
-            // Create transport and client
-            let transport = StdioTransport(serverPath: serverPath, logger: logger)
+            // Create transport: remote HTTP/SSE if serverURL set, else stdio subprocess
+            let transport: any MCPTransport
+            if let url = serverURL {
+                transport = SSETransport(serverURL: url, logger: logger)
+            } else {
+                transport = transportFactory(serverPath, logger)
+            }
             let client = MCPClient(transport: transport, logger: logger)
             
             // Start client (which starts transport and initializes)
@@ -76,13 +138,18 @@ public actor ServerManager {
             
             logger.info("Server started successfully")
             
-            // Start health monitoring
-            Task {
-                await monitorHealth()
+            // Start health monitoring if enabled
+            if config.enableHealthMonitoring {
+                healthMonitoringTask = Task {
+                    await monitorHealth()
+                }
             }
             
             return client
         } catch {
+            // Make sure health monitoring doesn't start if we failed
+            healthMonitoringTask?.cancel()
+            healthMonitoringTask = nil
             state = .crashed
             logger.error("Failed to start server: \(error.localizedDescription)")
             throw ServerManagerError.startFailed(error: error)
@@ -98,6 +165,10 @@ public actor ServerManager {
         isShuttingDown = true
         state = .shuttingDown
         logger.info("Stopping server")
+        
+        // Cancel health monitoring task
+        healthMonitoringTask?.cancel()
+        healthMonitoringTask = nil
         
         do {
             try await client?.stop()
@@ -129,11 +200,18 @@ public actor ServerManager {
     // MARK: - Health Monitoring
     
     private func monitorHealth() async {
-        while isRunning && !isShuttingDown {
-            // Wait 10 seconds between health checks
-            try? await Task.sleep(nanoseconds: 10_000_000_000)
+        let chunkSleepNs = config.healthCheckIntervalNs / UInt64(max(config.healthCheckChunks, 1))
+        
+        while !Task.isCancelled && isRunning && !isShuttingDown {
+            // Wait between health checks, but check cancellation frequently
+            for _ in 0..<config.healthCheckChunks {
+                guard !Task.isCancelled && isRunning && !isShuttingDown else {
+                    return
+                }
+                try? await Task.sleep(nanoseconds: chunkSleepNs)
+            }
             
-            guard let client = client, !isShuttingDown else {
+            guard !Task.isCancelled, let client = client, !isShuttingDown else {
                 break
             }
             
@@ -147,6 +225,27 @@ public actor ServerManager {
         }
     }
     
+    /// Manually trigger a health check (for testing)
+    public func performHealthCheck() async -> Bool {
+        guard let client = client else { return false }
+        return await client.isReady
+    }
+    
+    /// Manually trigger crash handling (for testing)
+    public func simulateCrash() async {
+        await handleCrash()
+    }
+    
+    /// Get current restart attempt count (for testing)
+    public var currentRestartAttempts: Int {
+        restartAttempts
+    }
+    
+    /// Reset restart attempts (for testing)
+    public func resetRestartAttempts() {
+        restartAttempts = 0
+    }
+    
     // MARK: - Crash Handling
     
     private func handleCrash() async {
@@ -158,17 +257,18 @@ public actor ServerManager {
         }
         
         // Attempt restart if under max attempts
-        guard restartAttempts < maxRestartAttempts else {
+        guard restartAttempts < config.maxRestartAttempts else {
             logger.error("Max restart attempts reached, giving up")
             return
         }
         
         restartAttempts += 1
-        logger.info("Attempting restart (\(self.restartAttempts)/\(self.maxRestartAttempts))")
+        logger.info("Attempting restart (\(self.restartAttempts)/\(self.config.maxRestartAttempts))")
         
-        // Exponential backoff
-        let delay = min(pow(2.0, Double(restartAttempts)), 30.0) // Max 30s
-        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+        // Exponential backoff - reduced for testing config
+        let delay = min(pow(2.0, Double(restartAttempts)), 30.0)
+        let delayNs = config == .testing ? 10_000_000 : UInt64(delay * 1_000_000_000) // 10ms for testing
+        try? await Task.sleep(nanoseconds: delayNs)
         
         do {
             _ = try await restart()

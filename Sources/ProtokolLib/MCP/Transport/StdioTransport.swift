@@ -17,6 +17,7 @@ public actor StdioTransport: MCPTransport {
     private var receiveWaiters: [CheckedContinuation<Data, Error>] = []
     private var stdoutReadTask: Task<Void, Never>?
     private var stderrReadTask: Task<Void, Never>?
+    private var readCancelled: UnsafeMutablePointer<Bool>?
     
     public var isConnected: Bool {
         process?.isRunning ?? false
@@ -37,9 +38,27 @@ public actor StdioTransport: MCPTransport {
     public func start() async throws {
         logger.info("Starting stdio transport with server: \(self.serverPath)")
         
+        // Check if file exists
         guard FileManager.default.fileExists(atPath: serverPath) else {
             logger.error("Server not found at: \(self.serverPath)")
             throw StdioTransportError.serverNotFound(path: serverPath)
+        }
+        
+        // Check if it's a directory (can't execute a directory)
+        var isDirectory: ObjCBool = false
+        if FileManager.default.fileExists(atPath: serverPath, isDirectory: &isDirectory), isDirectory.boolValue {
+            logger.error("Server path is a directory: \(self.serverPath)")
+            throw StdioTransportError.serverNotFound(path: serverPath)
+        }
+        
+        // Check if file is executable
+        guard FileManager.default.isExecutableFile(atPath: serverPath) else {
+            logger.error("Server file is not executable: \(self.serverPath)")
+            throw StdioTransportError.failedToStart(error: NSError(
+                domain: "StdioTransport",
+                code: -1,
+                userInfo: [NSLocalizedDescriptionKey: "File is not executable: \(serverPath)"]
+            ))
         }
         
         // Create pipes
@@ -83,7 +102,13 @@ public actor StdioTransport: MCPTransport {
             if !(process?.isRunning ?? false) {
                 logger.error("Server process died immediately after launch")
                 
-                // Try to read any error output
+                // Clean up pipes immediately to prevent blocking reads
+                stdinPipe = nil
+                stdoutPipe = nil
+                stderrPipe = nil
+                process = nil
+                
+                // Try to read any error output (non-blocking)
                 if let stderrPipe = stderrPipe {
                     let errorData = try? stderrPipe.fileHandleForReading.readToEnd()
                     if let errorData = errorData, let errorMsg = String(data: errorData, encoding: .utf8) {
@@ -97,6 +122,14 @@ public actor StdioTransport: MCPTransport {
             logger.info("Server is running and ready")
         } catch {
             logger.error("Failed to start server: \(error.localizedDescription)")
+            // CRITICAL: Close file handles on error to prevent any blocking reads
+            stdinPipe?.fileHandleForWriting.closeFile()
+            stdoutPipe?.fileHandleForReading.closeFile()
+            stderrPipe?.fileHandleForReading.closeFile()
+            stdinPipe = nil
+            stdoutPipe = nil
+            stderrPipe = nil
+            process = nil
             throw StdioTransportError.failedToStart(error: error)
         }
         
@@ -111,40 +144,45 @@ public actor StdioTransport: MCPTransport {
         
         // Start stdout reading - this is where we get responses
         // Use a simple flag for cancellation instead of actor hop
-        let readCancelled = UnsafeMutablePointer<Bool>.allocate(capacity: 1)
-        readCancelled.pointee = false
+        let cancelledPtr = UnsafeMutablePointer<Bool>.allocate(capacity: 1)
+        cancelledPtr.pointee = false
+        readCancelled = cancelledPtr
         
-        stdoutReadTask = Task.detached { [weak self] in
-            defer { readCancelled.deallocate() }
+        stdoutReadTask = Task.detached { [weak self, cancelledPtr] in
+            defer { cancelledPtr.deallocate() }
             
             fputs("=== STDOUT READ LOOP STARTED ===\n", stderr)
             var buffer = Data()
             var loopCount = 0
             
-            while !readCancelled.pointee {
+            while !Task.isCancelled && !cancelledPtr.pointee {
                 loopCount += 1
-                if loopCount <= 5 || loopCount % 100 == 0 {
-                    fputs("STDOUT: loop iteration \(loopCount)\n", stderr)
+                
+                // Check cancellation frequently
+                if Task.isCancelled || cancelledPtr.pointee {
+                    break
                 }
                 
-                // Check if self is still valid periodically
-                if loopCount % 50 == 0 {
-                    guard self != nil else {
-                        fputs("STDOUT: self deallocated, stopping\n", stderr)
-                        break
-                    }
+                // Check if self/process is still valid
+                guard let strongSelf = self else {
+                    break
                 }
                 
-                // Read data OFF the actor - NO await here!
+                // Check if process is still running (non-blocking check)
+                let isRunning = await strongSelf.process?.isRunning ?? false
+                if !isRunning {
+                    break
+                }
+                
+                // Read data - availableData can block, but closing the handle in stop() will unblock it
                 let data = stdoutHandle.availableData
                 
                 if data.isEmpty {
                     // No data available, sleep briefly
-                    try? await Task.sleep(nanoseconds: 10_000_000) // 0.01s
+                    try? await Task.sleep(nanoseconds: 50_000_000) // 0.05s
                     continue
                 }
                 
-                fputs("STDOUT: Read \(data.count) bytes: \(String(data: data, encoding: .utf8)?.prefix(200) ?? "binary")\n", stderr)
                 buffer.append(data)
                 
                 // Process complete messages (newline-delimited)
@@ -153,13 +191,9 @@ public actor StdioTransport: MCPTransport {
                     buffer.removeSubrange(...newlineIndex)
                     
                     if !messageData.isEmpty {
-                        if let str = String(data: messageData, encoding: .utf8) {
-                            fputs("STDOUT: Complete message: \(str.prefix(200))...\n", stderr)
-                        }
                         // Deliver to actor
-                        if let self = self {
-                            await self.deliverMessage(messageData)
-                            fputs("STDOUT: Message delivered to actor\n", stderr)
+                        if let strongSelf = self {
+                            await strongSelf.deliverMessage(messageData)
                         }
                     }
                 }
@@ -168,12 +202,13 @@ public actor StdioTransport: MCPTransport {
         }
         
         // Start stderr reading for error capture  
-        stderrReadTask = Task.detached { [weak self] in
+        stderrReadTask = Task.detached { [weak self, cancelledPtr] in
             fputs("=== STDERR READ LOOP STARTED ===\n", stderr)
             
-            while !readCancelled.pointee {
+            while !Task.isCancelled && !cancelledPtr.pointee {
                 if self == nil { break }
                 
+                // Read stderr - if handle is closed, this returns empty immediately
                 let data = stderrHandle.availableData
                 if !data.isEmpty {
                     if let msg = String(data: data, encoding: .utf8) {
@@ -184,7 +219,8 @@ public actor StdioTransport: MCPTransport {
                     }
                 }
                 
-                try? await Task.sleep(nanoseconds: 50_000_000) // 0.05s
+                // Sleep before next check
+                try? await Task.sleep(nanoseconds: 100_000_000) // 0.1s
             }
             fputs("=== STDERR READ LOOP ENDED ===\n", stderr)
         }
@@ -195,11 +231,28 @@ public actor StdioTransport: MCPTransport {
     public func stop() async throws {
         logger.info("Stopping stdio transport")
         
-        // Cancel read tasks first
+        // CRITICAL: Set cancellation flag FIRST
+        if let readCancelled = readCancelled {
+            readCancelled.pointee = true
+        }
+        
+        // CRITICAL: Close file handles IMMEDIATELY to unblock any pending availableData calls
+        // This MUST happen before cancelling tasks, otherwise availableData blocks forever
+        stdoutPipe?.fileHandleForReading.closeFile()
+        stderrPipe?.fileHandleForReading.closeFile()
+        stdinPipe?.fileHandleForWriting.closeFile()
+        
+        // Cancel read tasks (they should exit immediately now that handles are closed)
         stdoutReadTask?.cancel()
         stderrReadTask?.cancel()
+        
+        // Give tasks a brief moment to exit
+        try? await Task.sleep(nanoseconds: 50_000_000) // 0.05s
+        
+        // Clean up
         stdoutReadTask = nil
         stderrReadTask = nil
+        readCancelled = nil
         
         if let process = process, process.isRunning {
             process.terminate()
@@ -216,7 +269,7 @@ public actor StdioTransport: MCPTransport {
             }
         }
         
-        // Close pipes
+        // Clear pipe references
         stdinPipe = nil
         stdoutPipe = nil
         stderrPipe = nil

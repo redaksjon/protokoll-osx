@@ -5,7 +5,9 @@
 set -e
 
 echo "🧪 Running tests with coverage..."
-swift test --enable-code-coverage --parallel
+# Run without --parallel to avoid concurrency issues that cause hangs
+# Pipe through cat to ensure output is flushed immediately for kodrdriv compatibility
+swift test --enable-code-coverage | cat
 
 echo ""
 echo "📊 Generating coverage report..."

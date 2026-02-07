@@ -61,7 +61,7 @@ public struct ResourceContent: Codable {
 public enum ProtokolResourceURI {
     case transcript(path: String)
     case entity(type: String, id: String)
-    case transcripts(directory: String, limit: Int? = nil, offset: Int? = nil)
+    case transcripts(directory: String? = nil, limit: Int? = nil, offset: Int? = nil)
     case entities(type: String)
     case config
     
@@ -72,14 +72,19 @@ public enum ProtokolResourceURI {
         case .entity(let type, let id):
             return "protokoll://entity/\(type)/\(id)"
         case .transcripts(let directory, let limit, let offset):
-            var uri = "protokoll://transcripts?directory=\(directory.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? directory)"
+            var params: [String] = []
+            // Only include directory if provided (server uses its configured output directory as fallback)
+            if let directory = directory, !directory.isEmpty {
+                params.append("directory=\(directory.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? directory)")
+            }
             if let limit = limit {
-                uri += "&limit=\(limit)"
+                params.append("limit=\(limit)")
             }
             if let offset = offset {
-                uri += "&offset=\(offset)"
+                params.append("offset=\(offset)")
             }
-            return uri
+            let query = params.isEmpty ? "" : "?\(params.joined(separator: "&"))"
+            return "protokoll://transcripts\(query)"
         case .entities(let type):
             return "protokoll://entities/\(type)"
         case .config:
@@ -104,6 +109,22 @@ public struct TranscriptsListResource: Codable {
         public let date: String
         public let time: String?
         public let title: String
+        public let status: String?
+        public let openTasksCount: Int?
+        public let contentSize: Int?
+        public let entities: TranscriptEntities?
+        
+        public struct TranscriptEntities: Codable {
+            public let people: [EntityRef]?
+            public let projects: [EntityRef]?
+            public let terms: [EntityRef]?
+            public let companies: [EntityRef]?
+        }
+        
+        public struct EntityRef: Codable {
+            public let id: String
+            public let name: String
+        }
     }
     
     public struct Pagination: Codable {

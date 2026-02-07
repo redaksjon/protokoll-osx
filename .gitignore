@@ -94,3 +94,8 @@ logs/
 coverage/
 *.profdata
 *.profraw
+
+output/
+node_modules/
+dist/
+.kodrdriv*

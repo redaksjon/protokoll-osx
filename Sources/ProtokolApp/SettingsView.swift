@@ -3,34 +3,78 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @State private var settings: ProtokolSettings
+    @State private var showSavedConfirmation = false
     
     init() {
         _settings = State(initialValue: ProtokolSettings())
     }
     
     var body: some View {
-        TabView {
-            GeneralSettingsView(settings: $settings)
-                .tabItem {
-                    Label("General", systemImage: "gear")
-                }
+        VStack(spacing: 0) {
+            TabView {
+                GeneralSettingsView(settings: $settings)
+                    .tabItem {
+                        Label("General", systemImage: "gear")
+                    }
+                
+                PathsSettingsView(settings: $settings)
+                    .tabItem {
+                        Label("Paths", systemImage: "folder")
+                    }
+                
+                ModelsSettingsView(settings: $settings)
+                    .tabItem {
+                        Label("Models", systemImage: "cpu")
+                    }
+                
+                AdvancedSettingsView(settings: $settings, appState: appState)
+                    .tabItem {
+                        Label("Advanced", systemImage: "slider.horizontal.3")
+                    }
+            }
+            .frame(maxHeight: .infinity)
             
-            PathsSettingsView(settings: $settings)
-                .tabItem {
-                    Label("Paths", systemImage: "folder")
+            Divider()
+            HStack {
+                if showSavedConfirmation {
+                    HStack(spacing: 4) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                        Text("Settings saved")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                    .transition(.opacity)
                 }
-            
-            ModelsSettingsView(settings: $settings)
-                .tabItem {
-                    Label("Models", systemImage: "cpu")
+                
+                Spacer()
+                Button("Save Settings") {
+                    let mcpURLChanged = appState.settings.mcpServerURL != settings.mcpServerURL
+                    appState.settings = settings
+                    appState.persistSettings()
+                    withAnimation {
+                        showSavedConfirmation = true
+                    }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                        withAnimation {
+                            showSavedConfirmation = false
+                        }
+                    }
+                    // Reconnect MCP if the server URL changed
+                    if mcpURLChanged {
+                        Task {
+                            await appState.shutdownMCP()
+                            await appState.initializeMCP()
+                        }
+                    }
                 }
-            
-            AdvancedSettingsView(settings: $settings)
-                .tabItem {
-                    Label("Advanced", systemImage: "slider.horizontal.3")
-                }
+                .buttonStyle(.borderedProminent)
+                .padding(.horizontal, 20)
+                .padding(.vertical, 10)
+            }
+            .background(Color(NSColor.windowBackgroundColor))
         }
-        .frame(width: 550, height: 400)
+        .frame(width: 550, height: 440)
         .onAppear {
             settings = appState.settings
         }
@@ -62,22 +106,8 @@ struct GeneralSettingsView: View {
                 Toggle("Verbose Logging", isOn: $settings.verbose)
                     .help("Show detailed processing information")
             }
-            
-            HStack {
-                Spacer()
-                Button("Save Settings") {
-                    appState.settings = settings
-                    saveSettings()
-                }
-                .buttonStyle(.borderedProminent)
-            }
         }
         .padding()
-    }
-    
-    func saveSettings() {
-        // Save to UserDefaults or file
-        print("Settings saved")
     }
 }
 
@@ -205,14 +235,96 @@ struct ModelsSettingsView: View {
 
 struct AdvancedSettingsView: View {
     @Binding var settings: ProtokolSettings
+    @ObservedObject var appState: AppState
+    @State private var isReconnecting = false
+    @State private var reconnectMessage: String?
+    @State private var reconnectSuccess: Bool?
     
     var body: some View {
         Form {
-            Section("Advanced Options") {
-                Text("Coming soon...")
+            Section("MCP Server") {
+                TextField("MCP Server URL", text: $settings.mcpServerURL)
+                    .help("HTTP URL of the MCP server (e.g. http://127.0.0.1:3001). Clear to use stdio subprocess mode.")
+                Text("Connects to the Protokoll MCP server via HTTP. This should match the server URL used by the VSCode extension. Clear the field to spawn protokoll-mcp as a subprocess instead.")
+                    .font(.caption)
                     .foregroundColor(.secondary)
+                
+                Button("Reconnect MCP") {
+                    reconnectTapped()
+                }
+                .disabled(isReconnecting)
+                .help("Apply the current Remote MCP URL and reconnect.")
+                
+                if isReconnecting {
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                        Text("Reconnecting…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else if let message = reconnectMessage {
+                    Text(message)
+                        .font(.caption)
+                        .foregroundStyle(reconnectSuccess == true ? .green : .red)
+                }
+            }
+            
+            Section("MCP debug log") {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack {
+                        Text("Request/response log for debugging. Also in Console.app (filter: com.protokoll.mcp).")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Clear") {
+                            appState.clearMCPLog()
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            LazyVStack(alignment: .leading, spacing: 2) {
+                                ForEach(Array(appState.mcpDebugLog.enumerated()), id: \.offset) { _, line in
+                                    Text(line)
+                                        .font(.system(.caption, design: .monospaced))
+                                        .textSelection(.enabled)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
+                            .padding(6)
+                        }
+                        .frame(height: 140)
+                        .background(Color(NSColor.controlBackgroundColor))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .onChange(of: appState.mcpDebugLog.count) { _, _ in
+                            if let last = appState.mcpDebugLog.indices.last {
+                                proxy.scrollTo(last, anchor: .bottom)
+                            }
+                        }
+                    }
+                }
             }
         }
         .padding()
+    }
+    
+    private func reconnectTapped() {
+        reconnectMessage = nil
+        reconnectSuccess = nil
+        isReconnecting = true
+        appState.settings = settings
+        appState.persistSettings()
+        Task {
+            await appState.shutdownMCP()
+            await appState.initializeMCP()
+            await MainActor.run {
+                isReconnecting = false
+                reconnectSuccess = appState.mcpInitialized
+                reconnectMessage = appState.mcpInitialized
+                    ? "Connected"
+                    : (appState.mcpError ?? "Connection failed")
+            }
+        }
     }
 }
