@@ -88,6 +88,17 @@ jobs:
           
           echo "✅ App bundle created: ${APP_DIR}"
 
+      - name: Code sign app bundle
+        run: |
+          APP_NAME="Protokoll"
+          APP_DIR="${APP_NAME}.app"
+          
+          echo "🔏 Ad-hoc signing app bundle..."
+          codesign --force --deep --sign - "$APP_DIR"
+          
+          echo "✅ App bundle signed"
+          codesign --verify --verbose "$APP_DIR"
+
       - name: Create ZIP archive
         run: |
           APP_NAME="Protokoll"
@@ -103,5 +114,19 @@ jobs:
         with:
           files: |
             Protokoll-*.zip
+          body: |
+            ## Installation
+            
+            1. Download `Protokoll-${{ github.event.release.tag_name }}.zip`
+            2. Unzip the file
+            3. **Important**: Right-click on `Protokoll.app` and select "Open" (don't double-click)
+            4. Click "Open" in the security dialog
+            
+            > **Note**: This app is ad-hoc signed. macOS will show a security warning on first launch. 
+            > Use right-click → Open to bypass Gatekeeper. After the first launch, you can open it normally.
+            
+            ## What's Changed
+            
+            See the commit history for details.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
