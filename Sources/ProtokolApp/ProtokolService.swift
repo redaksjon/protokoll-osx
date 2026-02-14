@@ -102,14 +102,14 @@ class ProtokolService {
         
         do {
             let files = try fm.contentsOfDirectory(atPath: outputDir)
-            // Find recently created .md files
-            let mdFiles = files.filter { $0.hasSuffix(".md") }
+            // Find recently created .pkl files
+            let pklFiles = files.filter { $0.hasSuffix(".pkl") }
             
             // For demo purposes, create a sample transcript
             let transcript = Transcript(
                 title: file.url.deletingPathExtension().lastPathComponent,
                 date: Date(),
-                filePath: "\(outputDir)/\(file.url.deletingPathExtension().lastPathComponent).md",
+                filePath: "\(outputDir)/\(file.url.deletingPathExtension().lastPathComponent).pkl",
                 project: "Default",
                 duration: "5m 30s",
                 confidence: 0.92,

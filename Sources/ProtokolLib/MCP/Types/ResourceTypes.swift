@@ -170,3 +170,61 @@ public struct ConfigResource: Codable {
         public let companies: Int
     }
 }
+
+// MARK: - Transcript Content Response
+
+/// Structured transcript content returned by MCP server
+/// The server returns all metadata pre-parsed - clients should NOT parse this
+public struct TranscriptContentResource: Codable {
+    public let uri: String
+    public let path: String
+    public let title: String
+    public let metadata: TranscriptContentMetadata
+    public let content: String
+    
+    public struct TranscriptContentMetadata: Codable {
+        public let date: String?
+        public let time: String?
+        public let project: String?
+        public let projectId: String?
+        public let status: String?
+        public let tags: [String]?
+        public let duration: Double?
+        public let entities: TranscriptEntities?
+        public let tasks: [TranscriptTask]?
+        public let history: [StatusTransition]?
+        public let routing: RoutingInfo?
+        
+        public struct TranscriptEntities: Codable {
+            public let people: [EntityRef]?
+            public let projects: [EntityRef]?
+            public let terms: [EntityRef]?
+            public let companies: [EntityRef]?
+            
+            public struct EntityRef: Codable {
+                public let id: String
+                public let name: String
+            }
+        }
+        
+        public struct TranscriptTask: Codable, Identifiable {
+            public let id: String
+            public let description: String
+            public let status: String
+            public let created: String
+            public let changed: String?
+            public let completed: String?
+        }
+        
+        public struct StatusTransition: Codable {
+            public let from: String
+            public let to: String
+            public let at: String
+        }
+        
+        public struct RoutingInfo: Codable {
+            public let destination: String?
+            public let confidence: String?
+        }
+    }
+}

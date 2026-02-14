@@ -507,17 +507,23 @@ final class MCPClientResourcesMockTests: XCTestCase {
         let transport = MockTransport()
         await transport.configureInitializeResponse()
         
+        // Server now returns structured JSON instead of raw markdown
+        let structuredJson = """
+        {"uri":"protokoll://transcript/test","path":"test","title":"Test Transcript","metadata":{"status":"reviewed","tags":["test"]},"content":"Content here."}
+        """
         let readResponse = """
-        {"contents":[{"uri":"protokoll://transcript/test.md","mimeType":"text/markdown","text":"# Test Transcript\\n\\nContent here."}]}
+        {"contents":[{"uri":"protokoll://transcript/test.pkl","mimeType":"application/json","text":\(structuredJson.debugDescription)}]}
         """
         await transport.setRawResponse(for: "resources/read", json: readResponse)
         
         let client = MCPClient(transport: transport)
         try await client.start()
         
-        let markdown = try await client.readTranscriptResource(path: "test.md")
+        let transcriptData = try await client.readTranscriptResource(path: "test.pkl")
         
-        XCTAssertTrue(markdown.contains("Test Transcript"))
+        XCTAssertEqual(transcriptData.title, "Test Transcript")
+        XCTAssertEqual(transcriptData.content, "Content here.")
+        XCTAssertEqual(transcriptData.metadata.status, "reviewed")
         
         try await client.stop()
     }

@@ -1228,17 +1228,35 @@ struct TranscriptDetailView: View {
             }
             
             // Load the full transcript content via MCP resource
-            let transcriptContent = try await client.readTranscriptResource(path: transcript.filePath)
+            // Server returns structured JSON - no parsing needed
+            let transcriptData = try await client.readTranscriptResource(path: transcript.filePath)
             
-            // Parse frontmatter and content from the markdown
-            let parsed = parseTranscriptMarkdown(transcriptContent)
+            // Convert server response types to local view types
+            let localTasks: [TranscriptTask] = (transcriptData.metadata.tasks ?? []).map { task in
+                TranscriptTask(
+                    id: task.id,
+                    description: task.description,
+                    status: task.status,
+                    created: task.created
+                )
+            }
+            
+            let localEntities: TranscriptEntities? = {
+                guard let entities = transcriptData.metadata.entities else { return nil }
+                return TranscriptEntities(
+                    people: entities.people?.map { EntityRef(id: $0.id, name: $0.name) },
+                    projects: entities.projects?.map { EntityRef(id: $0.id, name: $0.name) },
+                    companies: entities.companies?.map { EntityRef(id: $0.id, name: $0.name) },
+                    terms: entities.terms?.map { EntityRef(id: $0.id, name: $0.name) }
+                )
+            }()
             
             await MainActor.run {
-                content = parsed.body
-                currentStatus = parsed.status ?? transcript.status
-                tasks = parsed.tasks
-                tags = parsed.tags
-                entities = parsed.entities
+                content = transcriptData.content
+                currentStatus = transcriptData.metadata.status ?? transcript.status
+                tasks = localTasks
+                tags = transcriptData.metadata.tags ?? []
+                entities = localEntities
                 isLoadingContent = false
             }
         } catch {
