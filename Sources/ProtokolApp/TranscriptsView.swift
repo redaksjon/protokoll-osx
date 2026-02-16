@@ -758,44 +758,57 @@ struct TranscriptDetailView: View {
                         TextField("Title", text: $editedTitle)
                             .font(.title)
                             .fontWeight(.bold)
-                            .textFieldStyle(.plain)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit {
+                                Task { await updateTitle() }
+                            }
+                            .onChange(of: editedTitle) { oldValue, newValue in
+                                // Remove object replacement character (U+FFFC), newlines, and other non-text characters
+                                // that might be inserted by rich text operations or pasting
+                                let filtered = newValue
+                                    .replacingOccurrences(of: "\u{FFFC}", with: "") // Object replacement character
+                                    .replacingOccurrences(of: "\u{200B}", with: "") // Zero-width space
+                                    .replacingOccurrences(of: "\u{FEFF}", with: "") // Zero-width no-break space
+                                    .replacingOccurrences(of: "\n", with: " ")      // Newlines to spaces
+                                    .replacingOccurrences(of: "\r", with: "")       // Carriage returns
+                                    .replacingOccurrences(of: "\t", with: " ")      // Tabs to spaces
+                                if filtered != newValue {
+                                    editedTitle = filtered
+                                }
+                            }
                         
                         HStack(spacing: 8) {
-                            Button("Save") {
+                            Button("Save (⏎)") {
                                 Task { await updateTitle() }
                             }
                             .buttonStyle(.borderedProminent)
                             .controlSize(.small)
                             
-                            Button("Cancel") {
+                            Button("Cancel (Esc)") {
                                 editingTitle = false
                             }
                             .controlSize(.small)
+                            .keyboardShortcut(.escape, modifiers: [])
                         }
                     }
                 } else {
-                    HStack(spacing: 8) {
-                        Text(transcript.title)
+                    HStack(alignment: .center, spacing: 8) {
+                        Text(cleanTitle(transcript.title))
                             .font(.title)
                             .fontWeight(.bold)
-                            .onTapGesture {
-                                editedTitle = transcript.title
-                                editingTitle = true
-                            }
+                            .textSelection(.enabled)
                         
                         Button {
-                            editedTitle = transcript.title
+                            editedTitle = cleanTitle(transcript.title)
                             editingTitle = true
                         } label: {
-                            HStack(spacing: 4) {
-                                Image(systemName: "pencil")
-                                    .foregroundColor(.secondary)
-                                    .font(.caption)
-                                KeyboardShortcutHint(key: "T")
-                            }
+                            Image(systemName: "pencil")
+                                .foregroundColor(.secondary)
+                                .font(.caption)
                         }
                         .buttonStyle(.plain)
-                        .keyboardShortcut("t", modifiers: [])
+                        .help("Edit title (⌘E)")
+                        .keyboardShortcut("e", modifiers: .command)
                     }
                 }
             }
@@ -916,14 +929,12 @@ struct TranscriptDetailView: View {
                         }
                     }
                 } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus.circle")
-                            .foregroundColor(.accentColor)
-                        KeyboardShortcutHint(key: "G")
-                    }
+                    Image(systemName: "plus.circle")
+                        .foregroundColor(.accentColor)
                 }
                 .buttonStyle(.plain)
-                .keyboardShortcut("g", modifiers: [])
+                .help("Add tag (⌘G)")
+                .keyboardShortcut("g", modifiers: .command)
             }
             
             if showAddTag {
@@ -1016,14 +1027,12 @@ struct TranscriptDetailView: View {
                         }
                     }
                 } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "plus.circle")
-                            .foregroundColor(.accentColor)
-                        KeyboardShortcutHint(key: "K")
-                    }
+                    Image(systemName: "plus.circle")
+                        .foregroundColor(.accentColor)
                 }
                 .buttonStyle(.plain)
-                .keyboardShortcut("k", modifiers: [])
+                .help("Add task (⌘K)")
+                .keyboardShortcut("k", modifiers: .command)
             }
             
             if showAddTask {
@@ -1219,17 +1228,35 @@ struct TranscriptDetailView: View {
             }
             
             // Load the full transcript content via MCP resource
-            let transcriptContent = try await client.readTranscriptResource(path: transcript.filePath)
+            // Server returns structured JSON - no parsing needed
+            let transcriptData = try await client.readTranscriptResource(path: transcript.filePath)
             
-            // Parse frontmatter and content from the markdown
-            let parsed = parseTranscriptMarkdown(transcriptContent)
+            // Convert server response types to local view types
+            let localTasks: [TranscriptTask] = (transcriptData.metadata.tasks ?? []).map { task in
+                TranscriptTask(
+                    id: task.id,
+                    description: task.description,
+                    status: task.status,
+                    created: task.created
+                )
+            }
+            
+            let localEntities: TranscriptEntities? = {
+                guard let entities = transcriptData.metadata.entities else { return nil }
+                return TranscriptEntities(
+                    people: entities.people?.map { EntityRef(id: $0.id, name: $0.name) },
+                    projects: entities.projects?.map { EntityRef(id: $0.id, name: $0.name) },
+                    companies: entities.companies?.map { EntityRef(id: $0.id, name: $0.name) },
+                    terms: entities.terms?.map { EntityRef(id: $0.id, name: $0.name) }
+                )
+            }()
             
             await MainActor.run {
-                content = parsed.body
-                currentStatus = parsed.status ?? transcript.status
-                tasks = parsed.tasks
-                tags = parsed.tags
-                entities = parsed.entities
+                content = transcriptData.content
+                currentStatus = transcriptData.metadata.status ?? transcript.status
+                tasks = localTasks
+                tags = transcriptData.metadata.tags ?? []
+                entities = localEntities
                 isLoadingContent = false
             }
         } catch {
@@ -1338,7 +1365,14 @@ struct TranscriptDetailView: View {
     }
     
     func updateTitle(retryCount: Int = 0) async {
-        guard !editedTitle.isEmpty else { return }
+        // Clean the title: remove object replacement characters and trim whitespace
+        let cleanedTitle = editedTitle
+            .replacingOccurrences(of: "\u{FFFC}", with: "") // Object replacement character
+            .replacingOccurrences(of: "\u{200B}", with: "") // Zero-width space
+            .replacingOccurrences(of: "\u{FEFF}", with: "") // Zero-width no-break space
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        guard !cleanedTitle.isEmpty else { return }
         isUpdating = true
         do {
             guard let client = await waitForClient() else {
@@ -1349,7 +1383,7 @@ struct TranscriptDetailView: View {
                 name: "protokoll_edit_transcript",
                 arguments: [
                     "transcriptPath": transcript.filePath,
-                    "title": editedTitle
+                    "title": cleanedTitle
                 ]
             )
             await MainActor.run {
@@ -1594,6 +1628,19 @@ struct TranscriptDetailView: View {
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
         return formatter.string(from: transcript.date)
+    }
+    
+    /// Clean title by removing object replacement characters, newlines, and other non-text Unicode
+    func cleanTitle(_ title: String) -> String {
+        return title
+            .replacingOccurrences(of: "\u{FFFC}", with: "") // Object replacement character
+            .replacingOccurrences(of: "\u{200B}", with: "") // Zero-width space
+            .replacingOccurrences(of: "\u{FEFF}", with: "") // Zero-width no-break space
+            .replacingOccurrences(of: "\n", with: " ")      // Newlines to spaces
+            .replacingOccurrences(of: "\r", with: "")       // Carriage returns
+            .replacingOccurrences(of: "\t", with: " ")      // Tabs to spaces
+            .replacingOccurrences(of: "  ", with: " ")      // Collapse double spaces
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
     
     func formatSize(_ bytes: Int) -> String {

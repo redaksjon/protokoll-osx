@@ -50,15 +50,18 @@ public extension MCPClient {
     }
     
     /// Read a transcript via resource
-    func readTranscriptResource(path: String) async throws -> String {
+    /// Returns structured JSON with metadata and content - no parsing needed
+    func readTranscriptResource(path: String) async throws -> TranscriptContentResource {
         let uri = ProtokolResourceURI.transcript(path: path).uri
         let content = try await readResource(uri: uri)
         
-        guard let text = content.text else {
+        guard let text = content.text,
+              let data = text.data(using: .utf8) else {
             throw MCPClientError.noResult
         }
         
-        return text // Markdown content
+        // Server returns structured JSON - parse it directly
+        return try JSONDecoder().decode(TranscriptContentResource.self, from: data)
     }
     
     /// List entities via resource
