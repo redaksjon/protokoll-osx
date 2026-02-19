@@ -28,15 +28,18 @@ public extension MCPClient {
     
     /// List transcripts via resource (preferred over tool)
     /// Pass nil or empty directory to let the server use its own configured output directory
+    /// Pass projectId to filter by project (UUID from context)
     func listTranscriptsResource(
         directory: String? = nil,
         limit: Int = 50,
-        offset: Int = 0
+        offset: Int = 0,
+        projectId: String? = nil
     ) async throws -> TranscriptsListResource {
         let uri = ProtokolResourceURI.transcripts(
             directory: directory,
             limit: limit,
-            offset: offset
+            offset: offset,
+            projectId: projectId
         ).uri
         
         let content = try await readResource(uri: uri)
