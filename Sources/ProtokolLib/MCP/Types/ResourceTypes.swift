@@ -61,7 +61,7 @@ public struct ResourceContent: Codable {
 public enum ProtokolResourceURI {
     case transcript(path: String)
     case entity(type: String, id: String)
-    case transcripts(directory: String? = nil, limit: Int? = nil, offset: Int? = nil)
+    case transcripts(directory: String? = nil, limit: Int? = nil, offset: Int? = nil, projectId: String? = nil)
     case entities(type: String)
     case config
     
@@ -71,7 +71,7 @@ public enum ProtokolResourceURI {
             return "protokoll://transcript/\(path)"
         case .entity(let type, let id):
             return "protokoll://entity/\(type)/\(id)"
-        case .transcripts(let directory, let limit, let offset):
+        case .transcripts(let directory, let limit, let offset, let projectId):
             var params: [String] = []
             // Only include directory if provided (server uses its configured output directory as fallback)
             if let directory = directory, !directory.isEmpty {
@@ -82,6 +82,9 @@ public enum ProtokolResourceURI {
             }
             if let offset = offset {
                 params.append("offset=\(offset)")
+            }
+            if let projectId = projectId, !projectId.isEmpty {
+                params.append("projectId=\(projectId.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? projectId)")
             }
             let query = params.isEmpty ? "" : "?\(params.joined(separator: "&"))"
             return "protokoll://transcripts\(query)"

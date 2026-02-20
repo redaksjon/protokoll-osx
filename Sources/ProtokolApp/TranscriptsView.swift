@@ -11,6 +11,8 @@ struct TranscriptsView: View {
     @State private var statusFilter: StatusFilter = .all
     @State private var projectFilter: String = "All Projects"
     @State private var availableProjects: [String] = []
+    /// Map project name -> project id from entities list (for server-side filtering)
+    @State private var projectIdByName: [String: String] = [:]
     @State private var isLoading = false
     @State private var error: String?
     @State private var currentOffset = 0
@@ -62,7 +64,8 @@ struct TranscriptsView: View {
             filtered = filtered.filter { $0.status == statusValue }
         }
         
-        // Apply project filter
+        // Project filter is applied server-side when we fetch with projectId, so no client-side filter needed
+        // (fallback: if server returned unfiltered data, filter by project name)
         if projectFilter != "All Projects" {
             filtered = filtered.filter { $0.project == projectFilter }
         }
@@ -185,6 +188,11 @@ struct TranscriptsView: View {
                     Task { await loadTranscripts() }
                 }
             }
+            // Reload when project filter changes so server-filtered results are fetched
+            .onChange(of: projectFilter) { _, _ in
+                currentOffset = 0
+                Task { await loadTranscripts() }
+            }
         } detail: {
             if let transcript = selectedTranscript {
                 TranscriptDetailView(
@@ -260,13 +268,26 @@ struct TranscriptsView: View {
                 return
             }
             
+            // Load projects (entities) to map project name -> id for server-side filtering
+            var projectIdMap: [String: String] = [:]
+            if let entitiesResult = try? await client.listEntitiesResource(type: "project") {
+                for entity in entitiesResult.entities {
+                    projectIdMap[entity.name] = entity.id
+                }
+            }
+            
+            // Resolve projectId when a project filter is selected
+            let selectedProjectId: String? = (projectFilter != "All Projects")
+                ? projectIdMap[projectFilter]
+                : nil
+            
             // Let the MCP server use its own configured output directory
-            // (same approach as the VSCode extension)
-            logger.info("Loading transcripts via MCP (server default directory)")
+            logger.info("Loading transcripts via MCP (server default directory)\(selectedProjectId != nil ? ", project filter: \(projectFilter)" : "")")
             
             let result = try await client.listTranscriptsResource(
                 limit: pageSize,
-                offset: currentOffset
+                offset: currentOffset,
+                projectId: selectedProjectId
             )
             
             logger.info("Loaded \(result.transcripts.count) transcripts (total: \(result.total))")
@@ -276,13 +297,15 @@ struct TranscriptsView: View {
                 Transcript.from(metadata: metadata)
             }
             
-            // Extract unique project names for the filter
-            let projects = Set(loadedTranscripts.compactMap { $0.project }).sorted()
+            // Extract unique project names for the filter (from loaded + any we know from entities)
+            var projects = Set(loadedTranscripts.compactMap { $0.project })
+            projects.formUnion(projectIdMap.keys)
             
             await MainActor.run {
                 transcripts = loadedTranscripts
                 totalTranscripts = result.total
-                availableProjects = projects
+                availableProjects = projects.sorted()
+                projectIdByName = projectIdMap
                 isLoading = false
             }
         } catch {
