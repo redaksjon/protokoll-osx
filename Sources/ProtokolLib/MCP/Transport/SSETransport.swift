@@ -19,6 +19,8 @@ public actor SSETransport: MCPTransport {
 
     /// Base server URL (e.g. http://127.0.0.1:3001). We POST to {serverURL}/mcp.
     private let serverURL: URL
+    /// Optional API key for authenticated MCP servers.
+    private let apiKey: String?
     private let logger: Logger
     /// Session ID received from the server's Mcp-Session-Id response header.
     private var sessionId: String?
@@ -35,6 +37,7 @@ public actor SSETransport: MCPTransport {
 
     public init(
         serverURL: URL,
+        apiKey: String? = nil,
         logger: Logger = Logger(subsystem: "com.protokoll.mcp", category: "http-transport")
     ) {
         // If the user gave us a URL ending in /mcp, strip it so we can append /mcp ourselves.
@@ -44,6 +47,7 @@ public actor SSETransport: MCPTransport {
             baseURL = baseURL.deletingLastPathComponent()
         }
         self.serverURL = baseURL
+        self.apiKey = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.logger = logger
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
@@ -53,6 +57,7 @@ public actor SSETransport: MCPTransport {
 
     public init(
         serverURLString: String,
+        apiKey: String? = nil,
         logger: Logger = Logger(subsystem: "com.protokoll.mcp", category: "http-transport")
     ) throws {
         guard let url = URL(string: serverURLString) else {
@@ -63,6 +68,7 @@ public actor SSETransport: MCPTransport {
             baseURL = baseURL.deletingLastPathComponent()
         }
         self.serverURL = baseURL
+        self.apiKey = apiKey?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         self.logger = logger
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 30
@@ -118,6 +124,10 @@ public actor SSETransport: MCPTransport {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json, text/event-stream", forHTTPHeaderField: "Accept")
+        if let apiKey {
+            request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            request.setValue(apiKey, forHTTPHeaderField: "X-API-Key")
+        }
         if let sid = sessionId {
             request.setValue(sid, forHTTPHeaderField: "Mcp-Session-Id")
         }
@@ -182,13 +192,23 @@ public actor SSETransport: MCPTransport {
             throw SSETransportError.writeFailed(error: NSError(domain: "SSETransport", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: errorMessage]))
         }
 
-        // Queue the response body for receive()
+        // Queue the response body for receive().
+        // The server may respond with text/event-stream wrapping JSON-RPC in SSE format.
+        // Unwrap SSE data lines before delivering so MCPClient receives raw JSON.
         if !responseData.isEmpty {
-            if let bodyStr = String(data: responseData, encoding: .utf8) {
-                let preview = bodyStr.prefix(200)
-                logger.debug("Response (\(responseData.count) bytes): \(preview)")
+            let contentType = httpResponse.value(forHTTPHeaderField: "Content-Type")?.lowercased() ?? ""
+            let payload: Data
+            if contentType.contains("text/event-stream") {
+                payload = extractJSONFromSSE(responseData)
+            } else {
+                payload = responseData
             }
-            deliverMessage(responseData)
+
+            if let bodyStr = String(data: payload, encoding: .utf8) {
+                let preview = bodyStr.prefix(200)
+                logger.debug("Response (\(payload.count) bytes): \(preview)")
+            }
+            deliverMessage(payload)
         }
     }
 
@@ -200,6 +220,26 @@ public actor SSETransport: MCPTransport {
         return try await withCheckedThrowingContinuation { continuation in
             receiveWaiters.append(continuation)
         }
+    }
+
+    /// Extract JSON payload from SSE-formatted response body.
+    /// SSE wraps JSON-RPC in lines like `event: message\ndata: {...}\n\n`.
+    /// We join all `data:` lines and return the result as raw JSON Data.
+    private func extractJSONFromSSE(_ sseData: Data) -> Data {
+        guard let text = String(data: sseData, encoding: .utf8) else { return sseData }
+        var dataLines: [String] = []
+        for line in text.components(separatedBy: "\n") {
+            if line.hasPrefix("data:") {
+                let payload = String(line.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+                dataLines.append(payload)
+            }
+        }
+        if dataLines.isEmpty {
+            logger.warning("No SSE data lines found, returning raw body")
+            return sseData
+        }
+        let joined = dataLines.joined()
+        return joined.data(using: .utf8) ?? sseData
     }
 
     private func deliverMessage(_ data: Data) {
@@ -230,5 +270,11 @@ public enum SSETransportError: Error, LocalizedError {
         case .connectionClosed: return "Connection closed"
         case .writeFailed(let e): return "Write failed: \(e.localizedDescription)"
         }
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        isEmpty ? nil : self
     }
 }
