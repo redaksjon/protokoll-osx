@@ -126,15 +126,39 @@ jobs:
           security default-keychain -s "${KEYCHAIN_PATH}"
 
           echo "Identities available for codesigning (this keychain only):"
-          security find-identity -v -p codesigning "${KEYCHAIN_PATH}" || true
+          IDENTITY_DUMP="$(security find-identity -v -p codesigning "${KEYCHAIN_PATH}" 2>&1)" || true
+          echo "${IDENTITY_DUMP}"
+
+          # Count identities that include a private key (what codesign needs)
+          DEV_ID_COUNT="$(printf '%s\n' "${IDENTITY_DUMP}" | grep -c 'Developer ID Application' || true)"
+          if [ "${DEV_ID_COUNT}" -eq 0 ]; then
+            echo ""
+            echo "❌ 0 code-signing identities after importing the .p12."
+            echo "   Setting CODESIGN_IDENTITY in GitHub cannot fix this — the private key must be inside the .p12."
+            echo ""
+            echo "   Fix on Mac (Keychain Access):"
+            echo "   1) Open 'login' keychain → Certificates."
+            echo "   2) Find 'Developer ID Application: …' (not 'Apple Distribution')."
+            echo "   3) Expand it — there must be a private key under it."
+            echo "   4) Right-click the **private key** (or the certificate+key) → Export → .p12 with a password."
+            echo "   5) Re-base64: base64 -i Your.p12 | pbcopy → update DEVELOPER_ID_CERT_BASE64"
+            echo ""
+            echo "   Also verify DEVELOPER_ID_CERT_PASSWORD matches the export password."
+            exit 1
+          fi
 
           TEAM_TRIM="$(printf '%s' "${APPLE_TEAM_ID}" | tr -d '[:space:]')"
 
           if [ -n "${CODESIGN_IDENTITY:-}" ]; then
+            if ! printf '%s\n' "${IDENTITY_DUMP}" | grep -Fq "${CODESIGN_IDENTITY}"; then
+              echo "❌ Secret CODESIGN_IDENTITY does not match any identity in the keychain after import."
+              echo "   Copy the exact line from 'security find-identity -v -p codesigning' on a Mac that has the cert, or remove the secret to auto-pick."
+              exit 1
+            fi
             IDENTITY="${CODESIGN_IDENTITY}"
           else
             IDENTITY="$(
-              security find-identity -v -p codesigning "${KEYCHAIN_PATH}" | awk -v tid="${TEAM_TRIM}" -F'"' '
+              printf '%s\n' "${IDENTITY_DUMP}" | awk -v tid="${TEAM_TRIM}" -F'"' '
                 /Developer ID Application/ {
                   if (tid != "" && index($0, tid) > 0) { print $2; exit }
                   if (tid == "") { print $2; exit }
@@ -143,15 +167,13 @@ jobs:
             )"
             if [ -z "${IDENTITY}" ] && [ -n "${TEAM_TRIM}" ]; then
               IDENTITY="$(
-                security find-identity -v -p codesigning "${KEYCHAIN_PATH}" | awk -F'"' '/Developer ID Application/ { print $2; exit }'
+                printf '%s\n' "${IDENTITY_DUMP}" | awk -F'"' '/Developer ID Application/ { print $2; exit }'
               )"
             fi
           fi
 
           if [ -z "${IDENTITY}" ]; then
-            echo "❌ No Developer ID Application identity found after import."
-            echo "   Fix: ensure the .p12 includes the private key, or set secret CODESIGN_IDENTITY to the full name from Keychain."
-            security find-identity -v -p codesigning "${KEYCHAIN_PATH}"
+            echo "❌ No Developer ID Application identity matched (check APPLE_TEAM_ID matches cert)."
             exit 1
           fi
 
