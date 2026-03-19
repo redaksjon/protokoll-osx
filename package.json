@@ -1,6 +1,6 @@
 {
   "name": "@redaksjon/protokoll-osx",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Native macOS application for Protokoll - intelligent audio transcription",
   "type": "module",
   "scripts": {
@@ -33,5 +33,9 @@
   "license": "Apache-2.0",
   "engines": {
     "node": ">=18.0.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "dev"
   }
 }

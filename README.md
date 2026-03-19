@@ -168,6 +168,8 @@ swift build -c release
 # The binary will be at .build/release/Protokoll
 ```
 
+**GitHub Releases (Developer ID + notarization):** see [docs/MACOS_SIGNING_AND_NOTARIZATION.md](docs/MACOS_SIGNING_AND_NOTARIZATION.md) for all Apple/GitHub secret setup steps.
+
 Or build with Xcode for a proper .app bundle:
 
 1. Open project in Xcode

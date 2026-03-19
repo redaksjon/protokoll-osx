@@ -89,16 +89,125 @@ jobs:
           
           echo "✅ App bundle created: ${APP_DIR}"
 
-      - name: Code sign app bundle
+      # Single step: decode p12, import into temp keychain, resolve identity, codesign.
+      # (Split steps can miss keychain context; macOS base64 uses -D, not GNU --decode.)
+      - name: Import certificate and code sign app bundle
+        env:
+          DEVELOPER_ID_CERT_BASE64: ${{ secrets.DEVELOPER_ID_CERT_BASE64 }}
+          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Optional: full identity string from `security find-identity -v -p codesigning`, e.g.
+          # Developer ID Application: My Company (XXXXXXXXXX)
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+        run: |
+          set -euo pipefail
+          APP_NAME="Protokoll"
+          APP_DIR="${APP_NAME}.app"
+          CERT_PATH="${RUNNER_TEMP}/developer_id.p12"
+          KEYCHAIN_PATH="${RUNNER_TEMP}/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+
+          printf '%s' "${DEVELOPER_ID_CERT_BASE64}" | base64 -D > "${CERT_PATH}" 2>/dev/null || \
+            printf '%s' "${DEVELOPER_ID_CERT_BASE64}" | base64 --decode > "${CERT_PATH}"
+
+          if [ ! -s "${CERT_PATH}" ]; then
+            echo "❌ Decoded .p12 is empty. Re-encode with: base64 -i Certificates.p12 | pbcopy"
+            echo "   (one line, no extra newlines in the GitHub secret)"
+            exit 1
+          fi
+
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security import "${CERT_PATH}" -P "${DEVELOPER_ID_CERT_PASSWORD}" -A -t cert -f pkcs12 -k "${KEYCHAIN_PATH}"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}" || \
+            security set-key-partition-list -S apple-tool:,apple: -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security list-keychains -d user -s "${KEYCHAIN_PATH}"
+          security default-keychain -s "${KEYCHAIN_PATH}"
+
+          echo "Identities available for codesigning (this keychain only):"
+          IDENTITY_DUMP="$(security find-identity -v -p codesigning "${KEYCHAIN_PATH}" 2>&1)" || true
+          echo "${IDENTITY_DUMP}"
+
+          # Count identities that include a private key (what codesign needs)
+          DEV_ID_COUNT="$(printf '%s\n' "${IDENTITY_DUMP}" | grep -c 'Developer ID Application' || true)"
+          if [ "${DEV_ID_COUNT}" -eq 0 ]; then
+            echo ""
+            echo "❌ 0 code-signing identities after importing the .p12."
+            echo "   Setting CODESIGN_IDENTITY in GitHub cannot fix this — the private key must be inside the .p12."
+            echo ""
+            echo "   Fix on Mac (Keychain Access):"
+            echo "   1) Open 'login' keychain → Certificates."
+            echo "   2) Find 'Developer ID Application: …' (not 'Apple Distribution')."
+            echo "   3) Expand it — there must be a private key under it."
+            echo "   4) Right-click the **private key** (or the certificate+key) → Export → .p12 with a password."
+            echo "   5) Re-base64: base64 -i Your.p12 | pbcopy → update DEVELOPER_ID_CERT_BASE64"
+            echo ""
+            echo "   Also verify DEVELOPER_ID_CERT_PASSWORD matches the export password."
+            exit 1
+          fi
+
+          TEAM_TRIM="$(printf '%s' "${APPLE_TEAM_ID}" | tr -d '[:space:]')"
+
+          if [ -n "${CODESIGN_IDENTITY:-}" ]; then
+            if ! printf '%s\n' "${IDENTITY_DUMP}" | grep -Fq "${CODESIGN_IDENTITY}"; then
+              echo "❌ Secret CODESIGN_IDENTITY does not match any identity in the keychain after import."
+              echo "   Copy the exact line from 'security find-identity -v -p codesigning' on a Mac that has the cert, or remove the secret to auto-pick."
+              exit 1
+            fi
+            IDENTITY="${CODESIGN_IDENTITY}"
+          else
+            IDENTITY="$(
+              printf '%s\n' "${IDENTITY_DUMP}" | awk -v tid="${TEAM_TRIM}" -F'"' '
+                /Developer ID Application/ {
+                  if (tid != "" && index($0, tid) > 0) { print $2; exit }
+                  if (tid == "") { print $2; exit }
+                }
+              '
+            )"
+            if [ -z "${IDENTITY}" ] && [ -n "${TEAM_TRIM}" ]; then
+              IDENTITY="$(
+                printf '%s\n' "${IDENTITY_DUMP}" | awk -F'"' '/Developer ID Application/ { print $2; exit }'
+              )"
+            fi
+          fi
+
+          if [ -z "${IDENTITY}" ]; then
+            echo "❌ No Developer ID Application identity matched (check APPLE_TEAM_ID matches cert)."
+            exit 1
+          fi
+
+          echo "🔏 Signing app bundle with: ${IDENTITY}"
+          codesign --force --deep --options runtime --sign "${IDENTITY}" "${APP_DIR}"
+
+          echo "✅ App bundle signed"
+          codesign --verify --deep --strict --verbose=2 "${APP_DIR}"
+          # Do NOT run spctl here: Developer ID + hardened runtime is "unnotarized" until
+          # notarytool + stapler — Gatekeeper assessment belongs after staple (see next step).
+
+      - name: Notarize app
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           APP_NAME="Protokoll"
           APP_DIR="${APP_NAME}.app"
-          
-          echo "🔏 Ad-hoc signing app bundle..."
-          codesign --force --deep --sign - "$APP_DIR"
-          
-          echo "✅ App bundle signed"
-          codesign --verify --verbose "$APP_DIR"
+          NOTARY_ZIP="${APP_NAME}-notary.zip"
+
+          ditto -c -k --keepParent "${APP_DIR}" "${NOTARY_ZIP}"
+
+          xcrun notarytool submit "${NOTARY_ZIP}" \
+            --apple-id "${APPLE_ID}" \
+            --password "${APPLE_APP_PASSWORD}" \
+            --team-id "${APPLE_TEAM_ID}" \
+            --wait
+
+          xcrun stapler staple "${APP_DIR}"
+          xcrun stapler validate "${APP_DIR}"
+
+          echo "Gatekeeper check (expects acceptance after notarization + staple):"
+          spctl --assess --type execute --verbose=4 "${APP_DIR}"
 
       - name: Create ZIP archive
         run: |
@@ -129,14 +238,20 @@ jobs:
             
             1. Download `Protokoll-<version>-macOS.zip`
             2. Unzip the file
-            3. **Important**: Right-click on `Protokoll.app` and select "Open" (don't double-click)
-            4. Click "Open" in the security dialog
+            3. Open `Protokoll.app`
             
-            > **Note**: This app is ad-hoc signed. macOS will show a security warning on first launch. 
-            > Use right-click → Open to bypass Gatekeeper. After the first launch, you can open it normally.
+            > **Note**: This app is Developer ID signed and notarized for a smooth macOS launch experience.
             
             ## What's Changed
             
             See the commit history for details.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          KEYCHAIN_PATH="${RUNNER_TEMP}/app-signing.keychain-db"
+          if [ -f "${KEYCHAIN_PATH}" ]; then
+            security delete-keychain "${KEYCHAIN_PATH}" || true
+          fi
