@@ -52,6 +52,8 @@ public actor ServerManager {
     private let serverPath: String
     /// When set, connect to remote MCP server via HTTP/SSE instead of spawning stdio process.
     private let serverURL: URL?
+    /// Optional API key used for authenticated HTTP MCP servers.
+    private let apiKey: String?
     private let logger: Logger
     private let transportFactory: TransportFactory
     private let config: ServerManagerConfig
@@ -91,12 +93,14 @@ public actor ServerManager {
     public init(
         serverPath: String = NSHomeDirectory() + "/.nvm/versions/node/v24.8.0/bin/protokoll-mcp",
         serverURL: URL? = nil,
+        apiKey: String? = nil,
         logger: Logger = Logger(subsystem: "com.protokoll.mcp", category: "server"),
         transportFactory: TransportFactory? = nil,
         config: ServerManagerConfig = .default
     ) {
         self.serverPath = serverPath
         self.serverURL = serverURL
+        self.apiKey = apiKey
         self.logger = logger
         self.transportFactory = transportFactory ?? ServerManager.defaultTransportFactory
         self.config = config
@@ -121,7 +125,7 @@ public actor ServerManager {
             // Create transport: remote HTTP/SSE if serverURL set, else stdio subprocess
             let transport: any MCPTransport
             if let url = serverURL {
-                transport = SSETransport(serverURL: url, logger: logger)
+                transport = SSETransport(serverURL: url, apiKey: apiKey, logger: logger)
             } else {
                 transport = transportFactory(serverPath, logger)
             }
