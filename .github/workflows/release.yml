@@ -89,35 +89,69 @@ jobs:
           
           echo "✅ App bundle created: ${APP_DIR}"
 
-      - name: Install signing certificate
+      # Single step: decode p12, import into temp keychain, resolve identity, codesign.
+      # (Split steps can miss keychain context; macOS base64 uses -D, not GNU --decode.)
+      - name: Import certificate and code sign app bundle
         env:
           DEVELOPER_ID_CERT_BASE64: ${{ secrets.DEVELOPER_ID_CERT_BASE64 }}
           DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Optional: full identity string from `security find-identity -v -p codesigning`, e.g.
+          # Developer ID Application: My Company (XXXXXXXXXX)
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
         run: |
+          set -euo pipefail
+          APP_NAME="Protokoll"
+          APP_DIR="${APP_NAME}.app"
           CERT_PATH="${RUNNER_TEMP}/developer_id.p12"
           KEYCHAIN_PATH="${RUNNER_TEMP}/app-signing.keychain-db"
           KEYCHAIN_PASSWORD="$(uuidgen)"
 
-          echo "${DEVELOPER_ID_CERT_BASE64}" | base64 --decode > "${CERT_PATH}"
+          printf '%s' "${DEVELOPER_ID_CERT_BASE64}" | base64 -D > "${CERT_PATH}" 2>/dev/null || \
+            printf '%s' "${DEVELOPER_ID_CERT_BASE64}" | base64 --decode > "${CERT_PATH}"
+
+          if [ ! -s "${CERT_PATH}" ]; then
+            echo "❌ Decoded .p12 is empty. Re-encode with: base64 -i Certificates.p12 | pbcopy"
+            echo "   (one line, no extra newlines in the GitHub secret)"
+            exit 1
+          fi
 
           security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
           security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
           security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
           security import "${CERT_PATH}" -P "${DEVELOPER_ID_CERT_PASSWORD}" -A -t cert -f pkcs12 -k "${KEYCHAIN_PATH}"
-          security set-key-partition-list -S apple-tool:,apple: -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
-          security list-keychains -d user -s "${KEYCHAIN_PATH}" login.keychain-db
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}" || \
+            security set-key-partition-list -S apple-tool:,apple: -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security list-keychains -d user -s "${KEYCHAIN_PATH}"
+          security default-keychain -s "${KEYCHAIN_PATH}"
 
-      - name: Code sign app bundle
-        env:
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          APP_NAME="Protokoll"
-          APP_DIR="${APP_NAME}.app"
-          IDENTITY="$(security find-identity -v -p codesigning | awk -F\" '/Developer ID Application/ && $0 ~ ENVIRON["APPLE_TEAM_ID"] {print $2; exit}')"
+          echo "Identities available for codesigning (this keychain only):"
+          security find-identity -v -p codesigning "${KEYCHAIN_PATH}" || true
+
+          TEAM_TRIM="$(printf '%s' "${APPLE_TEAM_ID}" | tr -d '[:space:]')"
+
+          if [ -n "${CODESIGN_IDENTITY:-}" ]; then
+            IDENTITY="${CODESIGN_IDENTITY}"
+          else
+            IDENTITY="$(
+              security find-identity -v -p codesigning "${KEYCHAIN_PATH}" | awk -v tid="${TEAM_TRIM}" -F'"' '
+                /Developer ID Application/ {
+                  if (tid != "" && index($0, tid) > 0) { print $2; exit }
+                  if (tid == "") { print $2; exit }
+                }
+              '
+            )"
+            if [ -z "${IDENTITY}" ] && [ -n "${TEAM_TRIM}" ]; then
+              IDENTITY="$(
+                security find-identity -v -p codesigning "${KEYCHAIN_PATH}" | awk -F'"' '/Developer ID Application/ { print $2; exit }'
+              )"
+            fi
+          fi
 
           if [ -z "${IDENTITY}" ]; then
-            echo "❌ Could not find Developer ID Application identity for team ${APPLE_TEAM_ID}"
-            security find-identity -v -p codesigning
+            echo "❌ No Developer ID Application identity found after import."
+            echo "   Fix: ensure the .p12 includes the private key, or set secret CODESIGN_IDENTITY to the full name from Keychain."
+            security find-identity -v -p codesigning "${KEYCHAIN_PATH}"
             exit 1
           fi
 
