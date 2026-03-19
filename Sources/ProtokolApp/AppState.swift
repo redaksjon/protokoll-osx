@@ -557,12 +557,15 @@ struct Transcript: Identifiable, Codable, Hashable {
     let status: String?
     let openTasksCount: Int?
     let contentSize: Int?
+    /// MCP resource URI when provided by the server (e.g. for copy URL); otherwise derive from `filePath`.
+    let resourceURI: String?
     
-    init(id: UUID = UUID(), title: String, date: Date, filePath: String, 
-         project: String? = nil, duration: String? = nil, 
+    init(id: UUID = UUID(), title: String, date: Date, filePath: String,
+         project: String? = nil, duration: String? = nil,
          confidence: Double? = nil, content: String,
          filename: String? = nil, time: String? = nil, hasRawTranscript: Bool = false,
-         status: String? = nil, openTasksCount: Int? = nil, contentSize: Int? = nil) {
+         status: String? = nil, openTasksCount: Int? = nil, contentSize: Int? = nil,
+         resourceURI: String? = nil) {
         self.id = id
         self.title = title
         self.date = date
@@ -577,6 +580,7 @@ struct Transcript: Identifiable, Codable, Hashable {
         self.status = status
         self.openTasksCount = openTasksCount
         self.contentSize = contentSize
+        self.resourceURI = resourceURI
     }
     
     /// Create from MCP transcript metadata
@@ -605,7 +609,8 @@ struct Transcript: Identifiable, Codable, Hashable {
             hasRawTranscript: false,  // Not provided by server resource
             status: metadata.status,
             openTasksCount: metadata.openTasksCount,
-            contentSize: metadata.contentSize
+            contentSize: metadata.contentSize,
+            resourceURI: metadata.uri
         )
     }
     
