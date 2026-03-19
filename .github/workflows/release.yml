@@ -2,7 +2,8 @@ name: Release
 
 on:
   release:
-    types: [created]
+    types: [published]
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -102,22 +103,31 @@ jobs:
       - name: Create ZIP archive
         run: |
           APP_NAME="Protokoll"
-          ZIP_NAME="Protokoll-${GITHUB_REF#refs/tags/}.zip"
-          ZIP_NAME="${ZIP_NAME//v/}"  # Remove 'v' prefix if present
+          VERSION="${{ github.event.release.tag_name }}"
+          VERSION="${VERSION#v}"
+          ZIP_NAME="Protokoll-${VERSION}-macOS.zip"
           
           ditto -c -k --keepParent "${APP_NAME}.app" "$ZIP_NAME"
           echo "✅ Created archive: $ZIP_NAME"
           ls -lh "$ZIP_NAME"
 
+      - name: Create checksum
+        run: |
+          ZIP_FILE="$(ls Protokoll-*-macOS.zip | head -n 1)"
+          shasum -a 256 "$ZIP_FILE" > "${ZIP_FILE}.sha256"
+          echo "✅ Created checksum:"
+          cat "${ZIP_FILE}.sha256"
+
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            Protokoll-*.zip
+            Protokoll-*-macOS.zip
+            Protokoll-*-macOS.zip.sha256
           body: |
             ## Installation
             
-            1. Download `Protokoll-${{ github.event.release.tag_name }}.zip`
+            1. Download `Protokoll-<version>-macOS.zip`
             2. Unzip the file
             3. **Important**: Right-click on `Protokoll.app` and select "Open" (don't double-click)
             4. Click "Open" in the security dialog

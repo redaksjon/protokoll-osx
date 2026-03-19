@@ -184,6 +184,14 @@ public struct TranscriptContentResource: Codable {
     public let title: String
     public let metadata: TranscriptContentMetadata
     public let content: String
+    public let rawTranscript: RawTranscript?
+
+    public struct RawTranscript: Codable {
+        public let text: String?
+        public let model: String?
+        public let language: String?
+        public let duration: Double?
+    }
     
     public struct TranscriptContentMetadata: Codable {
         public let date: String?

@@ -59,13 +59,10 @@ struct TranscriptsView: View {
             }
         }
         
-        // Apply status filter
         if let statusValue = statusFilter.apiValue {
             filtered = filtered.filter { $0.status == statusValue }
         }
         
-        // Project filter is applied server-side when we fetch with projectId, so no client-side filter needed
-        // (fallback: if server returned unfiltered data, filter by project name)
         if projectFilter != "All Projects" {
             filtered = filtered.filter { $0.project == projectFilter }
         }
@@ -80,6 +77,47 @@ struct TranscriptsView: View {
         }
         
         return filtered
+    }
+
+    private static let dayFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .none
+        return f
+    }()
+
+    private static let dayKeyFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        return f
+    }()
+
+    var groupedTranscripts: [(key: String, label: String, transcripts: [Transcript])] {
+        var groups: [String: (label: String, transcripts: [Transcript])] = [:]
+
+        for transcript in filteredTranscripts {
+            let dayKey = Self.dayKeyFormatter.string(from: transcript.date)
+            if groups[dayKey] != nil {
+                groups[dayKey]!.transcripts.append(transcript)
+            } else {
+                let label = Self.dayFormatter.string(from: transcript.date)
+                groups[dayKey] = (label: label, transcripts: [transcript])
+            }
+        }
+
+        let sortedKeys: [String]
+        switch sortOrder {
+        case .dateDescending:
+            sortedKeys = groups.keys.sorted(by: >)
+        case .dateAscending:
+            sortedKeys = groups.keys.sorted(by: <)
+        case .titleAscending:
+            sortedKeys = groups.keys.sorted(by: >)
+        }
+
+        return sortedKeys.map { key in
+            (key: key, label: groups[key]!.label, transcripts: groups[key]!.transcripts)
+        }
     }
     
     var body: some View {
@@ -160,9 +198,15 @@ struct TranscriptsView: View {
                 } else if filteredTranscripts.isEmpty {
                     TranscriptEmptyView(searchText: searchText)
                 } else {
-                    List(filteredTranscripts, selection: $selectedTranscript) { transcript in
-                        TranscriptRow(transcript: transcript)
-                            .tag(transcript)
+                    List(selection: $selectedTranscript) {
+                        ForEach(groupedTranscripts, id: \.key) { group in
+                            Section(group.label) {
+                                ForEach(group.transcripts) { transcript in
+                                    TranscriptRow(transcript: transcript)
+                                        .tag(transcript)
+                                }
+                            }
+                        }
                     }
                     
                     // Pagination controls
@@ -181,17 +225,23 @@ struct TranscriptsView: View {
             .task {
                 await loadTranscripts()
             }
-            // Auto-reload when MCP client becomes available (handles race condition
-            // where this view appears before MCP initialization completes)
             .onChange(of: appState.mcpInitialized) { _, isInitialized in
                 if isInitialized && transcripts.isEmpty {
                     Task { await loadTranscripts() }
                 }
             }
-            // Reload when project filter changes so server-filtered results are fetched
             .onChange(of: projectFilter) { _, _ in
                 currentOffset = 0
                 Task { await loadTranscripts() }
+            }
+            .onChange(of: appState.serverSwitchGeneration) { _, _ in
+                transcripts.removeAll()
+                selectedTranscript = nil
+                currentOffset = 0
+                error = nil
+                if appState.mcpInitialized {
+                    Task { await loadTranscripts() }
+                }
             }
         } detail: {
             if let transcript = selectedTranscript {
@@ -668,7 +718,14 @@ struct TranscriptDetailView: View {
     let transcript: Transcript
     var onRefresh: (() -> Void)?
     
+    enum ContentTarget: String, CaseIterable {
+        case enhanced = "Enhanced"
+        case original = "Original"
+    }
+
     @State private var content: String = ""
+    @State private var rawTranscriptText: String?
+    @State private var contentTarget: ContentTarget = .enhanced
     @State private var isLoadingContent = true
     @State private var contentError: String?
     @State private var editingTitle = false
@@ -708,7 +765,30 @@ struct TranscriptDetailView: View {
                 entitiesSection
                 
                 Divider()
-                
+
+                // Content target selector + copy actions
+                HStack {
+                    Picker("Content", selection: $contentTarget) {
+                        ForEach(ContentTarget.allCases, id: \.self) { target in
+                            Text(target.rawValue).tag(target)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .frame(width: 220)
+
+                    Spacer()
+
+                    Button {
+                        let textToCopy = contentTarget == .original ? (rawTranscriptText ?? "") : content
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(textToCopy, forType: .string)
+                    } label: {
+                        Label("Copy", systemImage: "doc.on.doc")
+                    }
+                    .controlSize(.small)
+                    .disabled(contentTarget == .original ? (rawTranscriptText ?? "").isEmpty : content.isEmpty)
+                }
+
                 // Content
                 contentSection
             }
@@ -1195,17 +1275,28 @@ struct TranscriptDetailView: View {
             }
             .frame(maxWidth: .infinity)
             .padding(.vertical, 40)
-        } else if content.isEmpty {
-            Text("No content available")
-                .foregroundColor(.secondary)
-                .font(.caption)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 40)
         } else {
-            Text(content)
-                .textSelection(.enabled)
-                .font(.body)
-                .lineSpacing(4)
+            let displayText: String = {
+                switch contentTarget {
+                case .enhanced:
+                    return content
+                case .original:
+                    return rawTranscriptText ?? ""
+                }
+            }()
+
+            if displayText.isEmpty {
+                Text(contentTarget == .original ? "No original transcript available" : "No content available")
+                    .foregroundColor(.secondary)
+                    .font(.caption)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 40)
+            } else {
+                Text(displayText)
+                    .textSelection(.enabled)
+                    .font(.body)
+                    .lineSpacing(4)
+            }
         }
     }
     
@@ -1276,6 +1367,7 @@ struct TranscriptDetailView: View {
             
             await MainActor.run {
                 content = transcriptData.content
+                rawTranscriptText = transcriptData.rawTranscript?.text
                 currentStatus = transcriptData.metadata.status ?? transcript.status
                 tasks = localTasks
                 tags = transcriptData.metadata.tags ?? []

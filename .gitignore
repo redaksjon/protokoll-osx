@@ -99,4 +99,3 @@ output/
 node_modules/
 dist/
 .kodrdriv*
-package-lock.json
