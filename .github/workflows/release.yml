@@ -182,7 +182,8 @@ jobs:
 
           echo "✅ App bundle signed"
           codesign --verify --deep --strict --verbose=2 "${APP_DIR}"
-          spctl --assess --type execute --verbose=4 "${APP_DIR}"
+          # Do NOT run spctl here: Developer ID + hardened runtime is "unnotarized" until
+          # notarytool + stapler — Gatekeeper assessment belongs after staple (see next step).
 
       - name: Notarize app
         env:
@@ -204,6 +205,9 @@ jobs:
 
           xcrun stapler staple "${APP_DIR}"
           xcrun stapler validate "${APP_DIR}"
+
+          echo "Gatekeeper check (expects acceptance after notarization + staple):"
+          spctl --assess --type execute --verbose=4 "${APP_DIR}"
 
       - name: Create ZIP archive
         run: |
