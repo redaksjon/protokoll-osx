@@ -4,6 +4,7 @@ struct SettingsView: View {
     @EnvironmentObject var appState: AppState
     @State private var settings: ProtokolSettings
     @State private var showSavedConfirmation = false
+    @State private var saveErrorMessage: String?
     
     init() {
         _settings = State(initialValue: ProtokolSettings())
@@ -46,11 +47,27 @@ struct SettingsView: View {
                     }
                     .transition(.opacity)
                 }
+
+                if let saveErrorMessage {
+                    Text(saveErrorMessage)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .lineLimit(2)
+                }
                 
                 Spacer()
                 Button("Save Settings") {
-                    let mcpURLChanged = appState.settings.mcpServerURL != settings.mcpServerURL
-                    appState.settings = settings
+                    let normalized = appState.normalizedSettings(settings)
+                    if let validationError = appState.validateServerProfiles(normalized) {
+                        saveErrorMessage = validationError
+                        showSavedConfirmation = false
+                        return
+                    }
+                    saveErrorMessage = nil
+                    let mcpServersChanged = appState.settings.mcpServers != settings.mcpServers
+                    let activeServerChanged = appState.settings.activeMCPServerID != settings.activeMCPServerID
+                    appState.settings = normalized
+                    settings = normalized
                     appState.persistSettings()
                     withAnimation {
                         showSavedConfirmation = true
@@ -60,11 +77,11 @@ struct SettingsView: View {
                             showSavedConfirmation = false
                         }
                     }
-                    // Reconnect MCP if the server URL changed
-                    if mcpURLChanged {
+                    // Reconnect MCP when server configuration changes.
+                    if mcpServersChanged || activeServerChanged {
                         Task {
                             await appState.shutdownMCP()
-                            await appState.initializeMCP()
+                            await appState.initializeMCP(serverID: normalized.activeMCPServerID)
                         }
                     }
                 }
@@ -239,34 +256,134 @@ struct AdvancedSettingsView: View {
     @State private var isReconnecting = false
     @State private var reconnectMessage: String?
     @State private var reconnectSuccess: Bool?
+    @State private var selectedServerID: UUID?
+    @State private var showToken = false
     
     var body: some View {
         Form {
-            Section("MCP Server") {
-                TextField("MCP Server URL", text: $settings.mcpServerURL)
-                    .help("HTTP URL of the MCP server (e.g. http://127.0.0.1:3001). Clear to use stdio subprocess mode.")
-                Text("Connects to the Protokoll MCP server via HTTP. This should match the server URL used by the VSCode extension. Clear the field to spawn protokoll-mcp as a subprocess instead.")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                
-                Button("Reconnect MCP") {
-                    reconnectTapped()
-                }
-                .disabled(isReconnecting)
-                .help("Apply the current Remote MCP URL and reconnect.")
-                
-                if isReconnecting {
-                    HStack(spacing: 6) {
-                        ProgressView()
-                            .scaleEffect(0.7)
-                        Text("Reconnecting…")
+            Section("MCP Servers") {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Configure local and remote MCP servers.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Add Server") {
+                            let newServer = MCPServerProfile(
+                                name: "New Server",
+                                connectionType: .remoteHTTP,
+                                serverURL: "http://127.0.0.1:3001",
+                                serverPath: settings.mcpServerPath,
+                                apiToken: ""
+                            )
+                            settings.mcpServers.append(newServer)
+                            selectedServerID = newServer.id
+                            if settings.activeMCPServerID == nil {
+                                settings.activeMCPServerID = newServer.id
+                            }
+                        }
                     }
-                } else if let message = reconnectMessage {
-                    Text(message)
-                        .font(.caption)
-                        .foregroundStyle(reconnectSuccess == true ? .green : .red)
+
+                    if settings.mcpServers.isEmpty {
+                        Text("No servers configured")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(settings.mcpServers) { server in
+                            HStack(spacing: 8) {
+                                Circle()
+                                    .fill(color(for: appState.status(for: server.id)))
+                                    .frame(width: 8, height: 8)
+                                Text(server.name)
+                                    .font(.subheadline)
+                                if settings.activeMCPServerID == server.id {
+                                    Text("active")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Button("Select") {
+                                    selectedServerID = server.id
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                            .contentShape(Rectangle())
+                            .onTapGesture {
+                                selectedServerID = server.id
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let index = selectedServerIndex {
+                Section("Selected Server") {
+                    TextField("Display Name", text: $settings.mcpServers[index].name)
+
+                    Picker("Connection Type", selection: $settings.mcpServers[index].connectionType) {
+                        ForEach(MCPServerProfile.ConnectionType.allCases, id: \.self) { type in
+                            Text(type.label).tag(type)
+                        }
+                    }
+
+                    if settings.mcpServers[index].connectionType == .remoteHTTP {
+                        TextField("MCP Server URL", text: $settings.mcpServers[index].serverURL)
+                            .help("HTTP URL of the remote MCP server, e.g. http://127.0.0.1:3001")
+                    } else {
+                        TextField("MCP Server Path", text: $settings.mcpServers[index].serverPath)
+                            .help("Path to local protokoll-mcp binary for stdio mode")
+                    }
+
+                    HStack {
+                        if showToken {
+                            TextField("API Token", text: $settings.mcpServers[index].apiToken)
+                        } else {
+                            SecureField("API Token", text: $settings.mcpServers[index].apiToken)
+                        }
+                        Button {
+                            showToken.toggle()
+                        } label: {
+                            Image(systemName: showToken ? "eye.slash" : "eye")
+                        }
+                        .buttonStyle(.borderless)
+                        .help(showToken ? "Hide token" : "Show token")
+                    }
+                    .help("Per-server API token stored in Keychain")
+
+                    HStack {
+                        Button("Set Active") {
+                            settings.activeMCPServerID = settings.mcpServers[index].id
+                        }
+                        Button("Connect") {
+                            connectSelectedServer()
+                        }
+                        .disabled(isReconnecting)
+                        Button("Disconnect") {
+                            Task {
+                                await appState.disconnectActiveServer()
+                            }
+                        }
+                        .disabled(isReconnecting)
+                        Spacer()
+                        Button("Remove Server", role: .destructive) {
+                            removeSelectedServer()
+                        }
+                        .disabled(settings.mcpServers.count <= 1)
+                    }
+
+                    if isReconnecting {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                            Text("Connecting…")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if let message = reconnectMessage {
+                        Text(message)
+                            .font(.caption)
+                            .foregroundStyle(reconnectSuccess == true ? .green : .red)
+                    }
                 }
             }
             
@@ -307,17 +424,49 @@ struct AdvancedSettingsView: View {
             }
         }
         .padding()
+        .onAppear {
+            if let pending = appState.pendingEditServerID {
+                selectedServerID = pending
+                appState.pendingEditServerID = nil
+            } else if selectedServerID == nil {
+                selectedServerID = settings.activeMCPServerID ?? settings.mcpServers.first?.id
+            }
+        }
     }
-    
-    private func reconnectTapped() {
+
+    private var selectedServerIndex: Int? {
+        guard let selectedServerID else { return nil }
+        return settings.mcpServers.firstIndex(where: { $0.id == selectedServerID })
+    }
+
+    private func connectSelectedServer() {
+        guard let index = selectedServerIndex else { return }
+        let intendedServerID = settings.mcpServers[index].id
         reconnectMessage = nil
         reconnectSuccess = nil
         isReconnecting = true
+        let normalized = appState.normalizedSettings(settings)
+        if let validationError = appState.validateServerProfiles(normalized) {
+            reconnectMessage = validationError
+            reconnectSuccess = false
+            isReconnecting = false
+            return
+        }
+        settings = normalized
+        let serverID = normalized.mcpServers.first(where: { $0.id == intendedServerID })?.id
+            ?? normalized.activeMCPServerID
+            ?? normalized.mcpServers.first?.id
+        guard let serverID else {
+            reconnectMessage = "No server is available to connect."
+            reconnectSuccess = false
+            isReconnecting = false
+            return
+        }
+        settings.activeMCPServerID = serverID
         appState.settings = settings
         appState.persistSettings()
         Task {
-            await appState.shutdownMCP()
-            await appState.initializeMCP()
+            await appState.connectToServer(serverID)
             await MainActor.run {
                 isReconnecting = false
                 reconnectSuccess = appState.mcpInitialized
@@ -325,6 +474,25 @@ struct AdvancedSettingsView: View {
                     ? "Connected"
                     : (appState.mcpError ?? "Connection failed")
             }
+        }
+    }
+
+    private func removeSelectedServer() {
+        guard let index = selectedServerIndex else { return }
+        let removingID = settings.mcpServers[index].id
+        settings.mcpServers.remove(at: index)
+        if settings.activeMCPServerID == removingID {
+            settings.activeMCPServerID = settings.mcpServers.first?.id
+        }
+        selectedServerID = settings.activeMCPServerID ?? settings.mcpServers.first?.id
+    }
+
+    private func color(for status: MCPServerConnectionStatus) -> Color {
+        switch status {
+        case .connected: return .green
+        case .connecting: return .orange
+        case .failed: return .red
+        case .disconnected: return .secondary
         }
     }
 }

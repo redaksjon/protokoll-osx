@@ -26,8 +26,8 @@ struct Sidebar: View {
                     Label(tab.rawValue, systemImage: iconForTab(tab))
                 }
             }
-            Section {
-                MCPConnectionStatusView()
+            Section("Servers") {
+                MCPServersStatusSection()
             }
         }
         .navigationTitle("Protokoll")
@@ -44,72 +44,139 @@ struct Sidebar: View {
     }
 }
 
-struct MCPConnectionStatusView: View {
+struct MCPServersStatusSection: View {
     @EnvironmentObject var appState: AppState
-    @State private var isReconnecting = false
-    
-    private var statusColor: Color {
-        appState.mcpInitialized ? Color.green : Color.red
-    }
-    
-    private var statusLabel: String {
-        if isReconnecting { return "Reconnecting..." }
-        return appState.mcpInitialized ? "MCP connected" : "MCP disconnected"
-    }
-    
-    private var statusDetail: String? {
-        if isReconnecting { return nil }
-        if appState.mcpInitialized {
-            let url = appState.settings.mcpServerURL
-            return url.isEmpty ? "stdio" : url
-        }
-        return appState.mcpError ?? "Not connected"
-    }
-    
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                if isReconnecting {
-                    ProgressView()
-                        .controlSize(.small)
-                        .frame(width: 10, height: 10)
-                } else {
-                    Circle()
-                        .fill(statusColor)
-                        .frame(width: 10, height: 10)
+        VStack(alignment: .leading, spacing: 8) {
+            if appState.settings.mcpServers.isEmpty {
+                Text("No MCP servers configured")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(appState.settings.mcpServers) { server in
+                    MCPServerStatusRow(server: server)
                 }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(statusLabel)
-                        .font(.subheadline)
-                        .foregroundStyle(.primary)
-                    if let detail = statusDetail {
-                        Text(detail)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(3)
-                    }
-                }
-                Spacer(minLength: 0)
             }
-            
-            if !appState.mcpInitialized && !isReconnecting {
-                Button {
-                    Task {
-                        isReconnecting = true
-                        await appState.shutdownMCP()
-                        await appState.initializeMCP()
-                        isReconnecting = false
-                    }
-                } label: {
-                    Label("Reconnect", systemImage: "arrow.clockwise")
-                        .font(.caption)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
+            if let error = appState.mcpError {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+                    .lineLimit(3)
             }
         }
         .padding(.vertical, 4)
-        .help(statusDetail ?? "Connected to MCP server")
+    }
+}
+
+private struct MCPServerStatusRow: View {
+    @EnvironmentObject var appState: AppState
+    let server: MCPServerProfile
+
+    private var status: MCPServerConnectionStatus {
+        appState.status(for: server.id)
+    }
+
+    private var statusColor: Color {
+        switch status {
+        case .connected: return .green
+        case .connecting: return .orange
+        case .failed: return .red
+        case .disconnected: return .secondary
+        }
+    }
+
+    private var statusLabel: String {
+        switch status {
+        case .connected: return "Connected"
+        case .connecting: return "Connecting…"
+        case .failed: return "Failed"
+        case .disconnected: return "Disconnected"
+        }
+    }
+
+    private var isActive: Bool {
+        appState.settings.activeMCPServerID == server.id
+    }
+
+    private var isConnected: Bool {
+        status == .connected
+    }
+
+    private var isConnecting: Bool {
+        status == .connecting
+    }
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            if isConnecting {
+                ProgressView()
+                    .controlSize(.mini)
+                    .frame(width: 8, height: 8)
+                    .padding(.top, 4)
+            } else {
+                Circle()
+                    .fill(statusColor)
+                    .frame(width: 8, height: 8)
+                    .padding(.top, 4)
+            }
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(server.name)
+                        .font(.subheadline)
+                        .fontWeight(isActive ? .semibold : .regular)
+                    if isActive {
+                        Text("active")
+                            .font(.caption2)
+                            .padding(.horizontal, 4)
+                            .padding(.vertical, 1)
+                            .background(statusColor.opacity(0.15))
+                            .clipShape(RoundedRectangle(cornerRadius: 3))
+                            .foregroundStyle(statusColor)
+                    }
+                }
+                Text(server.displayAddress)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Text(statusLabel)
+                    .font(.caption2)
+                    .foregroundStyle(statusColor)
+            }
+            Spacer(minLength: 0)
+        }
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button("Connect") {
+                Task {
+                    await appState.connectToServer(server.id)
+                }
+            }
+            .disabled(isConnected || isConnecting)
+
+            Button("Disconnect") {
+                Task {
+                    await appState.disconnectActiveServer()
+                }
+            }
+            .disabled(!isActive || !isConnected)
+
+            Divider()
+
+            Button("Set as Active") {
+                appState.settings.activeMCPServerID = server.id
+                appState.persistSettings()
+            }
+            .disabled(isActive)
+
+            Divider()
+
+            Button("Edit in Settings…") {
+                appState.pendingEditServerID = server.id
+                NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+            }
+        }
+        .help("\(server.name) — \(server.displayAddress) (\(statusLabel))")
     }
 }
 
