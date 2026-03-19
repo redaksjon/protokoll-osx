@@ -89,16 +89,65 @@ jobs:
           
           echo "✅ App bundle created: ${APP_DIR}"
 
+      - name: Install signing certificate
+        env:
+          DEVELOPER_ID_CERT_BASE64: ${{ secrets.DEVELOPER_ID_CERT_BASE64 }}
+          DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_CERT_PASSWORD }}
+        run: |
+          CERT_PATH="${RUNNER_TEMP}/developer_id.p12"
+          KEYCHAIN_PATH="${RUNNER_TEMP}/app-signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+
+          echo "${DEVELOPER_ID_CERT_BASE64}" | base64 --decode > "${CERT_PATH}"
+
+          security create-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security set-keychain-settings -lut 21600 "${KEYCHAIN_PATH}"
+          security unlock-keychain -p "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security import "${CERT_PATH}" -P "${DEVELOPER_ID_CERT_PASSWORD}" -A -t cert -f pkcs12 -k "${KEYCHAIN_PATH}"
+          security set-key-partition-list -S apple-tool:,apple: -k "${KEYCHAIN_PASSWORD}" "${KEYCHAIN_PATH}"
+          security list-keychains -d user -s "${KEYCHAIN_PATH}" login.keychain-db
+
       - name: Code sign app bundle
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           APP_NAME="Protokoll"
           APP_DIR="${APP_NAME}.app"
-          
-          echo "🔏 Ad-hoc signing app bundle..."
-          codesign --force --deep --sign - "$APP_DIR"
-          
+          IDENTITY="$(security find-identity -v -p codesigning | awk -F\" '/Developer ID Application/ && $0 ~ ENVIRON["APPLE_TEAM_ID"] {print $2; exit}')"
+
+          if [ -z "${IDENTITY}" ]; then
+            echo "❌ Could not find Developer ID Application identity for team ${APPLE_TEAM_ID}"
+            security find-identity -v -p codesigning
+            exit 1
+          fi
+
+          echo "🔏 Signing app bundle with: ${IDENTITY}"
+          codesign --force --deep --options runtime --sign "${IDENTITY}" "${APP_DIR}"
+
           echo "✅ App bundle signed"
-          codesign --verify --verbose "$APP_DIR"
+          codesign --verify --deep --strict --verbose=2 "${APP_DIR}"
+          spctl --assess --type execute --verbose=4 "${APP_DIR}"
+
+      - name: Notarize app
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          APP_NAME="Protokoll"
+          APP_DIR="${APP_NAME}.app"
+          NOTARY_ZIP="${APP_NAME}-notary.zip"
+
+          ditto -c -k --keepParent "${APP_DIR}" "${NOTARY_ZIP}"
+
+          xcrun notarytool submit "${NOTARY_ZIP}" \
+            --apple-id "${APPLE_ID}" \
+            --password "${APPLE_APP_PASSWORD}" \
+            --team-id "${APPLE_TEAM_ID}" \
+            --wait
+
+          xcrun stapler staple "${APP_DIR}"
+          xcrun stapler validate "${APP_DIR}"
 
       - name: Create ZIP archive
         run: |
@@ -129,14 +178,20 @@ jobs:
             
             1. Download `Protokoll-<version>-macOS.zip`
             2. Unzip the file
-            3. **Important**: Right-click on `Protokoll.app` and select "Open" (don't double-click)
-            4. Click "Open" in the security dialog
+            3. Open `Protokoll.app`
             
-            > **Note**: This app is ad-hoc signed. macOS will show a security warning on first launch. 
-            > Use right-click → Open to bypass Gatekeeper. After the first launch, you can open it normally.
+            > **Note**: This app is Developer ID signed and notarized for a smooth macOS launch experience.
             
             ## What's Changed
             
             See the commit history for details.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Cleanup keychain
+        if: always()
+        run: |
+          KEYCHAIN_PATH="${RUNNER_TEMP}/app-signing.keychain-db"
+          if [ -f "${KEYCHAIN_PATH}" ]; then
+            security delete-keychain "${KEYCHAIN_PATH}" || true
+          fi
