@@ -204,8 +204,8 @@ struct ProcessingFileRow: View {
     var statusText: String {
         switch file.status {
         case .pending: return "Waiting..."
-        case .transcribing: return "Transcribing audio..."
-        case .enhancing: return "Enhancing with AI..."
+        case .transcribing: return file.output.isEmpty ? "Transcribing audio..." : file.output
+        case .enhancing: return file.output.isEmpty ? "Enhancing with AI..." : file.output
         case .routing: return "Routing to destination..."
         case .completed: return "Completed"
         case .failed: return file.error ?? "Failed"

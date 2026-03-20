@@ -6,7 +6,7 @@ struct TranscriptsView: View {
     @EnvironmentObject var appState: AppState
     @State private var transcripts: [Transcript] = []
     @State private var searchText = ""
-    @State private var selectedTranscript: Transcript?
+    @State var selectedTranscript: Transcript?
     @State private var sortOrder: SortOrder = .dateDescending
     @State private var statusFilter: StatusFilter = .all
     @State private var projectFilter: String = "All Projects"
@@ -18,6 +18,16 @@ struct TranscriptsView: View {
     @State private var currentOffset = 0
     @State private var totalTranscripts = 0
     @FocusState private var detailViewFocused: Bool
+    /// List row context menu (aligned with protokoll-vscode `view/item/context`)
+    @State var listActionRenameTranscript: Transcript?
+    @State var listActionRenameTitle: String = ""
+    @State var listActionMoveTranscript: Transcript?
+    @State var listActionMoveProjects: [(id: String, name: String)] = []
+    @State var listActionMoveLoading = false
+    @State var listActionIdentifyTranscript: Transcript?
+    @State var listActionIdentifyCandidates: [TranscriptIdentifyCandidate] = []
+    @State var listActionSelectedCandidateIDs: Set<String> = []
+    @State var listActionIdentifyLoading = false
     let pageSize = 50
     private let logger = Logger(subsystem: "com.protokoll.app", category: "transcripts")
     
@@ -204,6 +214,9 @@ struct TranscriptsView: View {
                                 ForEach(group.transcripts) { transcript in
                                     TranscriptRow(transcript: transcript)
                                         .tag(transcript)
+                                        .contextMenu {
+                                            transcriptListContextMenu(for: transcript)
+                                        }
                                 }
                             }
                         }
@@ -279,11 +292,20 @@ struct TranscriptsView: View {
                 }
             }
         }
+        .sheet(item: $listActionRenameTranscript) { t in
+            transcriptListRenameSheet(transcript: t)
+        }
+        .sheet(item: $listActionMoveTranscript) { t in
+            transcriptListMoveProjectSheet(transcript: t)
+        }
+        .sheet(item: $listActionIdentifyTranscript) { t in
+            transcriptListIdentifyTasksSheet(transcript: t)
+        }
     }
     
     // MARK: - MCP Integration
     
-    private func loadTranscripts(retryCount: Int = 0) async {
+    func loadTranscripts(retryCount: Int = 0) async {
         isLoading = true
         error = nil
         
