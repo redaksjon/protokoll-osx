@@ -1,6 +1,6 @@
 {
   "name": "@redaksjon/protokoll-osx",
-  "version": "0.1.8",
+  "version": "0.1.8-dev.0",
   "description": "Native macOS application for Protokoll - intelligent audio transcription",
   "type": "module",
   "scripts": {
